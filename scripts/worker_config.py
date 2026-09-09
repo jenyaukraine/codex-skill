@@ -104,8 +104,8 @@ def normalize_config(config):
             raise ValueError("Duplicate worker id: " + worker_id)
         seen.add(worker_id)
         slots = int(worker.get("slots") or 0)
-        if slots < 0 or slots > 8:
-            raise ValueError("Worker slots must be between 0 and 8.")
+        if slots < 0 or slots > 12:
+            raise ValueError("Worker slots must be between 0 and 12.")
         worker_model = str(worker.get("model") or "").strip()
         worker_max_tokens = int(worker.get("max_tokens") or 0)
         worker_context_window = int(worker.get("context_window") or 0)

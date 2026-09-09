@@ -321,7 +321,7 @@ def render_config_page(config, message=''):
           <td><input name="id_{index}" value="{escape(worker['id'])}" required></td>
           <td><input name="name_{index}" value="{escape(worker['name'])}" required></td>
           <td><input name="base_url_{index}" value="{escape(worker['base_url'])}" required></td>
-          <td><input type="number" min="0" max="8" name="slots_{index}" value="{worker['slots']}" required></td>
+          <td><input type="number" min="0" max="12" name="slots_{index}" value="{worker['slots']}" required></td>
           <td><input name="model_{index}" value="{escape(worker.get('model', ''))}" placeholder="default"></td>
           <td><input type="number" min="0" name="max_tokens_{index}" value="{worker.get('max_tokens', 0)}"></td>
           <td><input type="number" min="0" name="context_window_{index}" value="{worker.get('context_window', 0)}"></td>
@@ -367,7 +367,7 @@ button,.button {{ border:0; border-radius:8px; background:var(--green); color:wh
   <table>
     <thead><tr><th>ID</th><th>Name</th><th>Base URL</th><th>Slots</th><th>Model</th><th>Output</th><th>Ctx</th><th>TTL</th><th>Timeout</th><th>Enabled</th></tr></thead>
     <tbody>{''.join(worker_rows)}
-      <tr><td><input name="id_new" placeholder="new-id"></td><td><input name="name_new" placeholder="New worker"></td><td><input name="base_url_new" placeholder="http://192.168.88.50:1234/v1"></td><td><input type="number" min="0" max="8" name="slots_new" value="1"></td><td><input name="model_new" placeholder="default"></td><td><input type="number" min="0" name="max_tokens_new" value="0"></td><td><input type="number" min="0" name="context_window_new" value="0"></td><td><input type="number" min="0" name="ttl_new" value="0"></td><td><input type="number" min="0" name="timeout_new" value="0"></td><td><input type="checkbox" name="enabled_new"></td></tr>
+      <tr><td><input name="id_new" placeholder="new-id"></td><td><input name="name_new" placeholder="New worker"></td><td><input name="base_url_new" placeholder="http://192.168.88.50:1234/v1"></td><td><input type="number" min="0" max="12" name="slots_new" value="1"></td><td><input name="model_new" placeholder="default"></td><td><input type="number" min="0" name="max_tokens_new" value="0"></td><td><input type="number" min="0" name="context_window_new" value="0"></td><td><input type="number" min="0" name="ttl_new" value="0"></td><td><input type="number" min="0" name="timeout_new" value="0"></td><td><input type="checkbox" name="enabled_new"></td></tr>
     </tbody>
   </table>
   <div class="actions"><button>Save configuration</button><a class="button secondary" href="/">Reload</a></div>
