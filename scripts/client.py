@@ -7,12 +7,9 @@ import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from worker_config import DEFAULT_WORKERS, private_http_v1
 
-WORKERS = {
-    "21": "http://192.168.88.21:1234/v1",
-    "5": "http://192.168.88.5:1234/v1",
-}
-LAN_HOSTS = {"192.168.88.21", "192.168.88.5"}
+WORKERS = {worker["id"]: worker["base_url"] for worker in DEFAULT_WORKERS}
 
 
 class NoRedirects(HTTPRedirectHandler):
@@ -21,11 +18,9 @@ class NoRedirects(HTTPRedirectHandler):
 
 
 def local_base(value):
-    parsed = urlsplit(value)
-    if (parsed.scheme != "http" or parsed.hostname not in {"localhost", "127.0.0.1", "::1"} | LAN_HOSTS
-            or parsed.username or parsed.password or parsed.query or parsed.fragment
-            or parsed.path.rstrip("/") != "/v1"
-            or (parsed.hostname in LAN_HOSTS and parsed.port != 1234)):
+    try:
+        return private_http_v1(value)
+    except ValueError as exc:
         raise argparse.ArgumentTypeError("Use worker 21 or 5 on HTTP port 1234 with /v1, or a loopback HTTP URL ending in /v1.")
     return value.rstrip("/")
 
@@ -49,7 +44,7 @@ def request_json(base, endpoint, payload, timeout):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     target = parser.add_mutually_exclusive_group()
-    target.add_argument("--worker", choices=WORKERS, help="Local worker slot: 21 (default) or 5.")
+    target.add_argument("--worker", help="Configured worker id. Defaults to 21.")
     target.add_argument("--base-url", type=local_base, help="Explicit approved LAN or loopback endpoint.")
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--models", action="store_true")
@@ -63,6 +58,8 @@ def main():
     args = parser.parse_args()
     if args.prompt_file and not args.via_dispatcher:
         parser.error('Generation must use dispatcher.py add --file tasks.json. client.py is an internal transport; --models remains available.')
+    if args.worker and args.worker not in WORKERS:
+        parser.error("Unknown worker id. Use dispatcher.py config-ui or --base-url for diagnostics.")
     args.base_url = args.base_url or WORKERS[args.worker or "21"]
     try:
         if args.models:

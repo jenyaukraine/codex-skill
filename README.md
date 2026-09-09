@@ -7,6 +7,7 @@ Codex skill for using two local LM Studio/Bionic workers through one durable sha
 - Sends text-only generation tasks to approved local workers.
 - Keeps one shared queue for both machines.
 - Uses up to three requests per host, six total.
+- Lets you configure worker URLs, enabled state, and slots per machine.
 - Automatically starts or reuses the persistent dispatcher runner.
 - Preserves uncertain results and blocks a host until the operator confirms the upstream generation stopped.
 - Keeps Codex responsible for reviewing, integrating, testing, and accepting generated output.
@@ -43,6 +44,26 @@ Check status:
 ```powershell
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" status
 ```
+
+Show JSON configuration:
+
+```powershell
+python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" config
+```
+
+Open the local configuration window:
+
+```powershell
+python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" config-ui
+```
+
+The configuration page supports:
+
+- adding more LAN or loopback machines,
+- changing base URLs,
+- enabling or disabling a worker,
+- setting slots per worker,
+- changing default model, timeout, and token budget.
 
 Read a result:
 

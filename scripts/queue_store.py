@@ -25,6 +25,13 @@ class Queue:
             db.executemany('INSERT INTO jobs VALUES (?,?,?,\'queued\',NULL,?)',
                            [(t['id'], t['prompt'], None, time.time()) for t in tasks])
 
+    def sync_workers(self, workers):
+        with closing(self.connect()) as db, db:
+            db.executemany(
+                'INSERT OR IGNORE INTO workers(id,blocked,note) VALUES(?,0,NULL)',
+                [(worker['id'],) for worker in workers],
+            )
+
     def claim(self, worker):
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')

@@ -14,7 +14,7 @@ Read [dispatcher usage](references/dispatcher.md) before first use. The paths ar
 ## Current user preferences (2026-09-09)
 
 - Hosts: `21` = `http://192.168.88.21:1234/v1`; `5` = `http://192.168.88.5:1234/v1`. Localhost is the same physical machine as 21, never a third worker.
-- Three requests per host, six total. Hardware supports four but three is the current requested limit.
+- Three requests per host, six total by default. Hardware supports four but three is the current requested limit. Per-worker slots and URLs can be changed through the local config UI.
 - One shared FIFO queue. Any available host takes the next task; do not pin tasks to a host. Legacy `worker` fields are accepted but ignored for routing.
 - Prepare a useful backlog before dispatch, then enqueue ready follow-ups as results arrive. Do not wait for all six results to start preparing the next iteration. If results awaiting review accumulate, finish acceptance instead of generating busywork.
 - Default model `qwen3.8-9b-distill`, OpenAI-compatible chat transport, no native per-request reasoning flag. Verified on host 5. Do not use `qwen3.8-9b-coder` for this queue because it returns LM Studio server errors. Do not change desktop model settings. A task ID is unique across the saved queue; use project, date and a meaningful suffix.
@@ -34,3 +34,5 @@ The two LAN hosts are user-authorized for task context, not unrelated personal d
 An uncertain response or timeout pauses that host because generation may still be running. Never automatically retry or unblock. Only release it after the operator confirms the upstream generation stopped. Completed/incomplete responses release their slots automatically. An empty queue is idle, not a scheduler error: state this accurately and do not claim GPU activity from local queue state alone.
 
 Useful diagnostics: dispatcher `status`, `result <id>`, and client `--worker 21 --models` / `--worker 5 --models`. See the reference for recovery and isolated tests. No direct generation commands should appear in handoffs.
+
+Configuration: use `python "<skill>/scripts/dispatcher.py" config` for JSON config, or `python "<skill>/scripts/dispatcher.py" config-ui` to open the local configuration page. The UI supports default worker URLs, adding machines, enabling/disabling workers, and per-worker slots. For a flaky host such as `5`, lower its slots or raise timeout in config instead of bypassing the dispatcher.

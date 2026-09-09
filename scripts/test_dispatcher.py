@@ -10,6 +10,7 @@ import time
 import unittest
 from unittest.mock import patch
 from dispatcher import Queue, drain, execute_job, runner_lock, validate_tasks
+from worker_config import default_config, enabled_workers, load_config, normalize_config, save_config
 
 
 class DispatcherTests(unittest.TestCase):
@@ -132,6 +133,47 @@ os._exit(1)
         result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).parent,
                                 capture_output=True, timeout=8, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_worker_config_defaults_and_validation(self):
+        config = load_config(self.root)
+        self.assertEqual([worker['id'] for worker in config['workers']], ['21', '5'])
+        self.assertEqual([worker['slots'] for worker in enabled_workers(config)], [3, 3])
+        saved = save_config(self.root, {
+            'model': 'local-model',
+            'max_tokens': 2048,
+            'timeout': 240,
+            'workers': [
+                {'id': '21', 'name': 'Main', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 2, 'enabled': True},
+                {'id': 'lab', 'name': 'Lab', 'base_url': 'http://10.0.0.12:9999/v1', 'slots': 1, 'enabled': True},
+                {'id': 'off', 'name': 'Off', 'base_url': 'http://127.0.0.1:1234/v1', 'slots': 0, 'enabled': True},
+            ],
+        })
+        self.assertEqual(saved['model'], 'local-model')
+        self.assertEqual([worker['id'] for worker in enabled_workers(saved)], ['21', 'lab'])
+        self.q.sync_workers(saved['workers'])
+        self.assertIn('lab', [row['id'] for row in self.q.workers()])
+        validate_tasks([{'id': 'new-worker', 'prompt': 'x', 'worker': 'lab'}], {'21', 'lab'})
+        with self.assertRaises(ValueError):
+            normalize_config({'workers': [{'id': 'bad', 'base_url': 'https://example.com/v1', 'slots': 1, 'enabled': True}]})
+
+    def test_custom_worker_slots_are_used(self):
+        self.q.add([{'id': str(i), 'prompt': 'x'} for i in range(5)])
+        seen = []
+        def fake(job, worker, *args):
+            seen.append(worker)
+            time.sleep(.02)
+            return 'done', {'content': 'ok'}
+        workers = [
+            {'id': '21', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 1},
+            {'id': '5', 'base_url': 'http://192.168.88.5:1234/v1', 'slots': 2},
+        ]
+        self.q.sync_workers(workers)
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = drain(self.q, self.root, execute=fake, workers=workers)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(seen), 5)
+        self.assertIn('21', seen)
+        self.assertIn('5', seen)
 
 
 if __name__ == '__main__':
