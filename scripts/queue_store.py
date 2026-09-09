@@ -13,7 +13,7 @@ class Queue:
         with closing(self.connect()) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, prompt TEXT NOT NULL, worker TEXT, status TEXT NOT NULL, result TEXT, created REAL)')
             db.execute('CREATE TABLE IF NOT EXISTS workers (id TEXT PRIMARY KEY, blocked INTEGER NOT NULL DEFAULT 0, note TEXT)')
-            db.executemany('INSERT OR IGNORE INTO workers(id) VALUES(?)', [('21',), ('5',)])
+            db.executemany('INSERT OR IGNORE INTO workers(id) VALUES(?)', [('21',), ('33',)])
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=30)
@@ -26,10 +26,17 @@ class Queue:
                            [(t['id'], t['prompt'], None, time.time()) for t in tasks])
 
     def sync_workers(self, workers):
+        ids = [worker['id'] for worker in workers]
+        placeholders = ','.join('?' for _ in ids)
         with closing(self.connect()) as db, db:
             db.executemany(
                 'INSERT OR IGNORE INTO workers(id,blocked,note) VALUES(?,0,NULL)',
-                [(worker['id'],) for worker in workers],
+                [(worker_id,) for worker_id in ids],
+            )
+            db.execute(
+                f"DELETE FROM workers WHERE id NOT IN ({placeholders}) AND id NOT IN "
+                "(SELECT worker FROM jobs WHERE status='running' AND worker IS NOT NULL)",
+                ids,
             )
 
     def claim(self, worker):

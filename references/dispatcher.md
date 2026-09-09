@@ -32,7 +32,7 @@ The live configuration is stored at `C:/Users/jenya/.codex/bionic-dispatcher/con
 Defaults:
 
 - `21`: `http://192.168.88.21:1234/v1`, `slots: 3`
-- `5`: `http://192.168.88.5:1234/v1`, `slots: 3`
+- `33`: `http://192.168.88.33:1234/v1`, `slots: 3`
 
 Open the local configuration page with `config-ui`. It allows adding local/LAN machines, editing base URLs, enabling/disabling workers, setting slots per worker, and overriding model, timeout, and max tokens per worker. Set slots to `0` or disable a worker to keep it out of dispatch. Existing watch runners should be restarted to apply changed slot counts. If the requested UI port is busy, `config-ui` binds a free local fallback port and prints it.
 

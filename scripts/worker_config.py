@@ -18,9 +18,9 @@ DEFAULT_WORKERS = [
         "enabled": True,
     },
     {
-        "id": "5",
-        "name": "Bionic 5",
-        "base_url": "http://192.168.88.5:1234/v1",
+        "id": "33",
+        "name": "Bionic 33",
+        "base_url": "http://192.168.88.33:1234/v1",
         "slots": 3,
         "model": "",
         "max_tokens": 0,

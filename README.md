@@ -16,7 +16,7 @@ Codex skill for using two local LM Studio/Bionic workers through one durable sha
 ## Current Worker Map
 
 - `21`: `http://192.168.88.21:1234/v1`
-- `5`: `http://192.168.88.5:1234/v1`
+- `33`: `http://192.168.88.33:1234/v1`
 - `localhost:1234/v1` is the same physical machine as `21`, not a third worker.
 
 Default model: `qwen3.8-9b-distill`.
@@ -92,7 +92,7 @@ python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" result 
 Unblock a worker only after the operator confirms the upstream generation has stopped:
 
 ```powershell
-python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" unblock 5 --note "Operator confirmed generation stopped"
+python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" unblock 33 --note "Operator confirmed generation stopped"
 ```
 
 ## Rights

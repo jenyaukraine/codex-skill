@@ -24,7 +24,7 @@ DEFAULT_HOME = Path(__file__).resolve().parents[3] / 'bionic-dispatcher'
 def validate_tasks(tasks, worker_ids=None):
     if not isinstance(tasks, list) or not tasks:
         raise ValueError('Expected a nonempty list of tasks')
-    worker_ids = set(worker_ids or ('21', '5'))
+    worker_ids = set(worker_ids or ('21', '33'))
     seen = set()
     for task in tasks:
         if not isinstance(task, dict) or set(task) - {'id', 'prompt', 'worker'}:
@@ -121,7 +121,7 @@ def ensure_runner(directory):
 
 def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qwen3.8-9b-distill', max_tokens=4096, timeout=180, reasoning='openai', workers=None):
     if workers is None:
-        workers = [{'id': '21', 'base_url': None, 'slots': slots}, {'id': '5', 'base_url': None, 'slots': slots}]
+        workers = [{'id': '21', 'base_url': None, 'slots': slots}, {'id': '33', 'base_url': None, 'slots': slots}]
     stop = threading.Event()
     output_lock = threading.Lock()
     def slot(worker):

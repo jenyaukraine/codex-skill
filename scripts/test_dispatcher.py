@@ -36,7 +36,7 @@ class DispatcherTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             self.q.add([{'id': 'b', 'prompt': 'y'}, {'id': 'a', 'prompt': 'z'}])
         self.assertEqual([r['id'] for r in self.q.status()], ['a'])
-        self.assertEqual(self.q.claim('5')['id'], 'a')
+        self.assertEqual(self.q.claim('33')['id'], 'a')
 
     def test_uncertain_pauses_only_one_host_and_recovery(self):
         self.q.add([{'id': str(i), 'prompt': 'x'} for i in range(3)])
@@ -46,7 +46,7 @@ class DispatcherTests(unittest.TestCase):
         self.q.recover()
         self.assertIsNone(self.q.claim('21'))
         self.assertEqual(self.q.result('0')['status'], 'uncertain')
-        self.assertEqual(self.q.claim('5')['id'], '1')
+        self.assertEqual(self.q.claim('33')['id'], '1')
         self.q.unblock('21')
         self.assertEqual(self.q.claim('21')['id'], '2')
 
@@ -75,13 +75,13 @@ class DispatcherTests(unittest.TestCase):
             self.assertEqual(status, expected)
             self.assertEqual(list(prompt_dir.iterdir()), [])
         with patch('dispatcher.subprocess.run', side_effect=subprocess.TimeoutExpired('client', 1)):
-            status, _ = execute_job({'id': 'x', 'prompt': 'test'}, '5', prompt_dir, 'm', 100, 1, 'off')
+            status, _ = execute_job({'id': 'x', 'prompt': 'test'}, '33', prompt_dir, 'm', 100, 1, 'off')
         self.assertEqual(status, 'uncertain')
         self.assertEqual(list(prompt_dir.iterdir()), [])
 
     def test_three_slots_each_refill_before_slowest_finishes(self):
         self.q.add([{'id': str(i), 'prompt': 'x'} for i in range(18)])
-        active = {'21': 0, '5': 0}; peaks = active.copy()
+        active = {'21': 0, '33': 0}; peaks = active.copy()
         started = {}; finished = {}; guard = threading.Lock()
         barrier = threading.Barrier(6, timeout=5)
         def fake(job, worker, *args):
@@ -99,7 +99,7 @@ class DispatcherTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             result = drain(self.q, self.root, execute=fake)
         self.assertEqual(result, 0)
-        self.assertEqual(peaks, {'21': 3, '5': 3})
+        self.assertEqual(peaks, {'21': 3, '33': 3})
         self.assertEqual(len(started), 18)
         self.assertLess(started['6'], finished['0'])
 
@@ -136,7 +136,7 @@ os._exit(1)
 
     def test_worker_config_defaults_and_validation(self):
         config = load_config(self.root)
-        self.assertEqual([worker['id'] for worker in config['workers']], ['21', '5'])
+        self.assertEqual([worker['id'] for worker in config['workers']], ['21', '33'])
         self.assertEqual([worker['slots'] for worker in enabled_workers(config)], [3, 3])
         saved = save_config(self.root, {
             'model': 'local-model',
@@ -159,6 +159,13 @@ os._exit(1)
         with self.assertRaises(ValueError):
             normalize_config({'workers': [{'id': 'bad', 'base_url': 'https://example.com/v1', 'slots': 1, 'enabled': True}]})
 
+    def test_sync_workers_removes_stale_idle_workers(self):
+        self.q.sync_workers([{'id': '21'}, {'id': '5'}])
+        self.assertIn('5', [row['id'] for row in self.q.workers()])
+        self.q.sync_workers([{'id': '21'}, {'id': '33'}])
+        self.assertNotIn('5', [row['id'] for row in self.q.workers()])
+        self.assertIn('33', [row['id'] for row in self.q.workers()])
+
     def test_custom_worker_slots_are_used(self):
         self.q.add([{'id': str(i), 'prompt': 'x'} for i in range(5)])
         seen = []
@@ -168,7 +175,7 @@ os._exit(1)
             return 'done', {'content': 'ok'}
         workers = [
             {'id': '21', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 1},
-            {'id': '5', 'base_url': 'http://192.168.88.5:1234/v1', 'slots': 2},
+            {'id': '33', 'base_url': 'http://192.168.88.33:1234/v1', 'slots': 2},
         ]
         self.q.sync_workers(workers)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -176,7 +183,7 @@ os._exit(1)
         self.assertEqual(result, 0)
         self.assertEqual(len(seen), 5)
         self.assertIn('21', seen)
-        self.assertIn('5', seen)
+        self.assertIn('33', seen)
 
     def test_per_worker_overrides_and_summary(self):
         self.q.add([{'id': 'pref-1', 'prompt': 'x'}, {'id': 'pref-2', 'prompt': 'x'}])
@@ -187,13 +194,13 @@ os._exit(1)
             return 'done', {'content': 'ok'}
         workers = [
             {'id': '21', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 1, 'model': 'fast', 'max_tokens': 512, 'timeout': 60},
-            {'id': '5', 'base_url': 'http://192.168.88.5:1234/v1', 'slots': 1, 'model': '', 'max_tokens': 0, 'timeout': 0},
+            {'id': '33', 'base_url': 'http://192.168.88.33:1234/v1', 'slots': 1, 'model': '', 'max_tokens': 0, 'timeout': 0},
         ]
         self.q.sync_workers(workers)
         with contextlib.redirect_stdout(io.StringIO()):
             drain(self.q, self.root, execute=fake, workers=workers, model='default', max_tokens=4096, timeout=180)
         self.assertIn(('21', 'fast', 512, 60, 'http://192.168.88.21:1234/v1'), calls)
-        self.assertIn(('5', 'default', 4096, 180, 'http://192.168.88.5:1234/v1'), calls)
+        self.assertIn(('33', 'default', 4096, 180, 'http://192.168.88.33:1234/v1'), calls)
         summary = status_summary(self.q, prefix='pref-', limit=1)
         self.assertEqual(summary['counts'], {'done': 2})
         self.assertEqual(summary['prefix'], 'pref-')
