@@ -7,6 +7,7 @@ python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" add --f
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" status
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" summary --prefix project-20260909-
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" health
+python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" warmup
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" result project-20260909-example
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" config
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" config-ui
@@ -34,9 +35,9 @@ Defaults:
 - `21`: `http://192.168.88.21:1234/v1`, `slots: 3`
 - `33`: `http://192.168.88.33:1234/v1`, `slots: 3`
 
-Open the local configuration page with `config-ui`. It allows adding local/LAN machines, editing base URLs, enabling/disabling workers, setting slots per worker, and overriding model, timeout, max output tokens, and context window per worker. Set slots to `0` or disable a worker to keep it out of dispatch. Existing watch runners should be restarted to apply changed slot counts. If the requested UI port is busy, `config-ui` binds a free local fallback port and prints it.
+Open the local configuration page with `config-ui`. It allows adding local/LAN machines, editing base URLs, enabling/disabling workers, setting slots per worker, and overriding model, timeout, max output tokens, context window, and TTL per worker. Set slots to `0` or disable a worker to keep it out of dispatch. Existing watch runners should be restarted to apply changed slot counts. If the requested UI port is busy, `config-ui` binds a free local fallback port and prints it.
 
-Default context window is `230000` for planning and diagnostics. This is not sent as a random OpenAI chat parameter and does not shrink the model; LM Studio controls the actual ctx at model load time. `max_tokens` is only the response/output budget and is clamped to at least `32768`.
+Default context window is `230000`; default TTL is `900` seconds. `warmup` sends a tiny request with the configured model, context window, and TTL to make the model hot before queue work. Normal generation requests also include TTL so LM Studio can unload the model after idle time. `max_tokens` is only the response/output budget and is clamped to at least `32768`.
 
 ## State and interpretation
 
@@ -64,4 +65,4 @@ Never kill a worker or silently repeat timed-out work. If the runner process exi
 
 `client.py` is an internal text transport. For read-only model discovery only: `python <skill>/scripts/client.py --worker 21 --models`. Do not send generation through it, raw HTTP, project helper scripts, or multiple queue processes.
 
-Default model: qwen3.8-9b-distill; OpenAI-compatible chat transport; max output tokens 32768 minimum; context window 230000; timeout 180 seconds. Do not use qwen3.8-9b-coder for this queue; it returns LM Studio server errors. Pass `run --reasoning off` only for models verified with LM Studio's native chat endpoint. Live defaults are centralized in `config.json`, falling back to `worker_config.py` defaults. Prefer `summary` over full `status` when the queue is large. Tests: `python -m unittest test_dispatcher -v` from the skill scripts directory.
+Default model: qwen3.8-9b-distill; OpenAI-compatible chat transport; max output tokens 32768 minimum; context window 230000; TTL 900 seconds; timeout 180 seconds. Do not use qwen3.8-9b-coder for this queue; it returns LM Studio server errors. Pass `run --reasoning off` only for models verified with LM Studio's native chat endpoint. Live defaults are centralized in `config.json`, falling back to `worker_config.py` defaults. Prefer `summary` over full `status` when the queue is large. Tests: `python -m unittest test_dispatcher -v` from the skill scripts directory.

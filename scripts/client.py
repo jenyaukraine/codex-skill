@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
-from worker_config import DEFAULT_WORKERS, private_http_v1
+from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, DEFAULT_WORKERS, private_http_v1
 
 WORKERS = {worker["id"]: worker["base_url"] for worker in DEFAULT_WORKERS}
 
@@ -46,11 +46,14 @@ def main():
     target.add_argument("--base-url", type=local_base, help="Explicit approved LAN or loopback endpoint.")
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--models", action="store_true")
+    action.add_argument("--warmup", action="store_true")
     action.add_argument("--prompt-file", type=Path)
     parser.add_argument("--model", default="qwen3.8-9b-distill")
     parser.add_argument("--via-dispatcher", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--max-tokens", type=positive, default=4096)
     parser.add_argument("--timeout", type=positive, default=180)
+    parser.add_argument("--context-window", type=positive, default=DEFAULT_CONTEXT_WINDOW)
+    parser.add_argument("--ttl", type=positive, default=DEFAULT_TTL_SECONDS)
     parser.add_argument("--reasoning", choices=("off", "on"),
                         help="Per-request native LM Studio reasoning mode; unsupported models return an error.")
     args = parser.parse_args()
@@ -64,6 +67,29 @@ def main():
             result = request_json(args.base_url, "/models", None, min(args.timeout, 10))
             print(json.dumps({"base_url": args.base_url, "models": [m["id"] for m in result["data"]]}, ensure_ascii=False))
             return 0
+        if args.warmup:
+            payload = {
+                "model": args.model,
+                "messages": [{"role": "user", "content": "Reply with OK."}],
+                "temperature": 0,
+                "max_tokens": 256,
+                "stream": False,
+                "ttl": args.ttl,
+                "context_length": args.context_window,
+            }
+            result = request_json(args.base_url, "/chat/completions", payload, args.timeout)
+            choice = result["choices"][0]
+            content = choice["message"].get("content") or ""
+            print(json.dumps({
+                "base_url": args.base_url,
+                "model": result.get("model", args.model),
+                "context_window_requested": args.context_window,
+                "ttl": args.ttl,
+                "content": content,
+                "finish_reason": choice.get("finish_reason"),
+                "complete": bool(content.strip()),
+            }, ensure_ascii=False))
+            return 0 if content.strip() else 3
         prompt = args.prompt_file.read_text(encoding="utf-8-sig")
         if not prompt.strip():
             raise ValueError("Prompt file is empty.")
@@ -85,6 +111,7 @@ def main():
             "temperature": 0,
             "max_tokens": args.max_tokens,
             "stream": False,
+            "ttl": args.ttl,
         }
         if args.reasoning is not None:
             result = request_json(args.base_url.removesuffix("/v1"), "/api/v1/chat", {
@@ -93,6 +120,7 @@ def main():
                 "integrations": [], "store": False, "stream": False,
                 "reasoning": args.reasoning, "temperature": 0,
                 "max_output_tokens": args.max_tokens,
+                "ttl": args.ttl,
             }, args.timeout)
             output = result["output"]
             if any(item.get("type") not in ("message", "reasoning") for item in output):
@@ -115,7 +143,13 @@ def main():
                           "finish_reason": reason, "complete": complete}, ensure_ascii=False))
         return 0 if complete else 3
     except HTTPError as error:
-        print(f"Local API returned HTTP {error.code}; no retry performed.", file=sys.stderr)
+        detail = ""
+        try:
+            detail = error.read().decode("utf-8", "replace")[:1000]
+        except OSError:
+            detail = ""
+        suffix = f": {detail}" if detail else ""
+        print(f"Local API returned HTTP {error.code}{suffix}; no retry performed.", file=sys.stderr)
     except (URLError, TimeoutError, OSError) as error:
         print(f"Local API or input file unavailable: {error}. No retry performed.", file=sys.stderr)
     except (ValueError, KeyError, IndexError, TypeError) as error:

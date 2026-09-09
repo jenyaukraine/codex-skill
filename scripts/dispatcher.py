@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 import webbrowser
 from queue_store import Queue
-from worker_config import DEFAULT_CONTEXT_WINDOW, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, save_config
+from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, save_config
 
 DEFAULT_HOME = Path(__file__).resolve().parents[3] / 'bionic-dispatcher'
 
@@ -67,14 +67,14 @@ def runner_lock(path):
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def execute_job(job, worker, directory, model, max_tokens, timeout, reasoning, base_url=None):
+def execute_job(job, worker, directory, model, max_tokens, timeout, reasoning, base_url=None, ttl=DEFAULT_TTL_SECONDS):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.txt', dir=directory, delete=False) as prompt:
         prompt.write(job['prompt'])
         prompt_path = Path(prompt.name)
     try:
         command = [sys.executable, str(Path(__file__).with_name('client.py')), '--via-dispatcher',
                    '--prompt-file', str(prompt_path), '--model', model, '--max-tokens', str(max_tokens),
-                   '--timeout', str(timeout)]
+                   '--timeout', str(timeout), '--ttl', str(ttl)]
         if base_url:
             command.extend(['--base-url', base_url])
         else:
@@ -119,7 +119,7 @@ def ensure_runner(directory):
     return 'starting'
 
 
-def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qwen3.8-9b-distill', max_tokens=MIN_MAX_TOKENS, timeout=180, reasoning='openai', workers=None):
+def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qwen3.8-9b-distill', max_tokens=MIN_MAX_TOKENS, timeout=180, ttl=DEFAULT_TTL_SECONDS, reasoning='openai', workers=None):
     if workers is None:
         workers = [{'id': '21', 'base_url': None, 'slots': slots}, {'id': '33', 'base_url': None, 'slots': slots}]
     stop = threading.Event()
@@ -141,9 +141,10 @@ def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qw
                 if worker_max_tokens < MIN_MAX_TOKENS:
                     worker_max_tokens = MIN_MAX_TOKENS
                 worker_timeout = worker.get('timeout') or timeout
+                worker_ttl = worker.get('ttl') or ttl
                 status, result = execute(
                     job, worker_id, directory, worker_model, worker_max_tokens,
-                    worker_timeout, reasoning, worker.get('base_url')
+                    worker_timeout, reasoning, worker.get('base_url'), worker_ttl
                 )
             except Exception as exc:
                 status, result = 'uncertain', {'error': str(exc)[:1000]}
@@ -235,6 +236,65 @@ def worker_health(workers, timeout=10):
     return results
 
 
+def worker_warmup(workers, model, context_window, ttl, timeout=60):
+    results = []
+    for worker in workers:
+        worker_model = worker.get('model') or model
+        worker_context = worker.get('context_window') or context_window
+        worker_ttl = worker.get('ttl') or ttl
+        worker_timeout = worker.get('timeout') or timeout
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name('client.py')),
+            '--base-url',
+            worker['base_url'],
+            '--warmup',
+            '--model',
+            worker_model,
+            '--context-window',
+            str(worker_context),
+            '--ttl',
+            str(worker_ttl),
+            '--timeout',
+            str(worker_timeout),
+        ]
+        started = time.monotonic()
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                timeout=worker_timeout + 5,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            results.append({
+                'id': worker['id'],
+                'base_url': worker['base_url'],
+                'ok': False,
+                'latency_ms': round((time.monotonic() - started) * 1000),
+                'error': str(exc)[:1000],
+            })
+            continue
+        try:
+            payload = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            payload = {}
+        results.append({
+            'id': worker['id'],
+            'base_url': worker['base_url'],
+            'ok': result.returncode == 0 and payload.get('complete') is True,
+            'latency_ms': round((time.monotonic() - started) * 1000),
+            'model': payload.get('model', worker_model),
+            'context_window_requested': worker_context,
+            'ttl': worker_ttl,
+            'content': payload.get('content', ''),
+            'error': '' if result.returncode == 0 else (result.stderr.strip() or result.stdout.strip())[:1000],
+        })
+    return results
+
+
 def render_config_page(config, message=''):
     worker_rows = []
     for index, worker in enumerate(config['workers']):
@@ -248,6 +308,7 @@ def render_config_page(config, message=''):
           <td><input name="model_{index}" value="{escape(worker.get('model', ''))}" placeholder="default"></td>
           <td><input type="number" min="0" name="max_tokens_{index}" value="{worker.get('max_tokens', 0)}"></td>
           <td><input type="number" min="0" name="context_window_{index}" value="{worker.get('context_window', 0)}"></td>
+          <td><input type="number" min="0" name="ttl_{index}" value="{worker.get('ttl', 0)}"></td>
           <td><input type="number" min="0" name="timeout_{index}" value="{worker.get('timeout', 0)}"></td>
           <td><input type="checkbox" name="enabled_{index}" {checked}></td>
         </tr>""")
@@ -283,16 +344,17 @@ button,.button {{ border:0; border-radius:8px; background:var(--green); color:wh
     <div><label>Default model</label><input name="model" value="{escape(config['model'])}" required></div>
     <div><label>Max output tokens</label><input type="number" min="{MIN_MAX_TOKENS}" name="max_tokens" value="{config['max_tokens']}" required></div>
     <div><label>Context window</label><input type="number" min="1" name="context_window" value="{config.get('context_window', DEFAULT_CONTEXT_WINDOW)}" required></div>
+    <div><label>TTL seconds</label><input type="number" min="1" name="ttl" value="{config.get('ttl', DEFAULT_TTL_SECONDS)}" required></div>
     <div><label>Timeout seconds</label><input type="number" min="1" name="timeout" value="{config['timeout']}" required></div>
   </div>
   <table>
-    <thead><tr><th>ID</th><th>Name</th><th>Base URL</th><th>Slots</th><th>Model</th><th>Output</th><th>Ctx</th><th>Timeout</th><th>Enabled</th></tr></thead>
+    <thead><tr><th>ID</th><th>Name</th><th>Base URL</th><th>Slots</th><th>Model</th><th>Output</th><th>Ctx</th><th>TTL</th><th>Timeout</th><th>Enabled</th></tr></thead>
     <tbody>{''.join(worker_rows)}
-      <tr><td><input name="id_new" placeholder="new-id"></td><td><input name="name_new" placeholder="New worker"></td><td><input name="base_url_new" placeholder="http://192.168.88.50:1234/v1"></td><td><input type="number" min="0" max="8" name="slots_new" value="1"></td><td><input name="model_new" placeholder="default"></td><td><input type="number" min="0" name="max_tokens_new" value="0"></td><td><input type="number" min="0" name="context_window_new" value="0"></td><td><input type="number" min="0" name="timeout_new" value="0"></td><td><input type="checkbox" name="enabled_new"></td></tr>
+      <tr><td><input name="id_new" placeholder="new-id"></td><td><input name="name_new" placeholder="New worker"></td><td><input name="base_url_new" placeholder="http://192.168.88.50:1234/v1"></td><td><input type="number" min="0" max="8" name="slots_new" value="1"></td><td><input name="model_new" placeholder="default"></td><td><input type="number" min="0" name="max_tokens_new" value="0"></td><td><input type="number" min="0" name="context_window_new" value="0"></td><td><input type="number" min="0" name="ttl_new" value="0"></td><td><input type="number" min="0" name="timeout_new" value="0"></td><td><input type="checkbox" name="enabled_new"></td></tr>
     </tbody>
   </table>
   <div class="actions"><button>Save configuration</button><a class="button secondary" href="/">Reload</a></div>
-  <p class="hint">Output tokens are clamped to at least {MIN_MAX_TOKENS}. Context window defaults to {DEFAULT_CONTEXT_WINDOW} and is used for planning/diagnostics; LM Studio model loading controls the actual ctx. Set slots to 0 or disable a flaky machine.</p>
+  <p class="hint">Output tokens are clamped to at least {MIN_MAX_TOKENS}. Context window defaults to {DEFAULT_CONTEXT_WINDOW}. TTL keeps a warmed model loaded after work, then lets LM Studio unload it when idle. Set slots to 0 or disable a flaky machine.</p>
 </form></section></main></body></html>"""
 
 
@@ -312,6 +374,7 @@ def form_to_config(form):
             'model': form.get('model_' + index, [''])[0],
             'max_tokens': int(form.get('max_tokens_' + index, ['0'])[0] or 0),
             'context_window': int(form.get('context_window_' + index, ['0'])[0] or 0),
+            'ttl': int(form.get('ttl_' + index, ['0'])[0] or 0),
             'timeout': int(form.get('timeout_' + index, ['0'])[0] or 0),
             'enabled': ('enabled_' + index) in form,
         })
@@ -319,6 +382,7 @@ def form_to_config(form):
         'model': form.get('model', [''])[0],
         'max_tokens': int(form.get('max_tokens', [str(MIN_MAX_TOKENS)])[0] or MIN_MAX_TOKENS),
         'context_window': int(form.get('context_window', [str(DEFAULT_CONTEXT_WINDOW)])[0] or DEFAULT_CONTEXT_WINDOW),
+        'ttl': int(form.get('ttl', [str(DEFAULT_TTL_SECONDS)])[0] or DEFAULT_TTL_SECONDS),
         'timeout': int(form.get('timeout', ['180'])[0] or 180),
         'workers': workers,
     }
@@ -386,6 +450,8 @@ def main():
     summary.add_argument('--limit', type=int, default=12)
     health = commands.add_parser('health')
     health.add_argument('--timeout', type=int, default=10)
+    warmup = commands.add_parser('warmup', help='Warm enabled workers with the configured model, context window, and TTL')
+    warmup.add_argument('--timeout', type=int, default=60)
     commands.add_parser('config')
     config_ui = commands.add_parser('config-ui')
     config_ui.add_argument('--host', default='127.0.0.1')
@@ -409,6 +475,8 @@ def main():
         emit(status_summary(queue, args.prefix, args.limit))
     elif args.command == 'health':
         emit({'workers': worker_health(config['workers'], args.timeout)})
+    elif args.command == 'warmup':
+        emit({'workers': worker_warmup(enabled_workers(config), config['model'], config['context_window'], config['ttl'], args.timeout)})
     elif args.command == 'config':
         emit(config)
     elif args.command == 'config-ui':
@@ -434,7 +502,7 @@ def main():
             queue.recover()
             configured = enabled_workers(config)
             return drain(queue, args.home, args.slots, args.watch, model=args.model or config['model'],
-                         max_tokens=max_tokens, timeout=timeout,
+                         max_tokens=max_tokens, timeout=timeout, ttl=config['ttl'],
                          reasoning=args.reasoning, workers=configured)
     return 0
 

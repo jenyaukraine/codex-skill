@@ -22,6 +22,7 @@ Codex skill for using two local LM Studio/Bionic workers through one durable sha
 Default model: `qwen3.8-9b-distill`.
 Default context window for planning/diagnostics: `230000`.
 Minimum max output tokens: `32768`.
+Default TTL: `900` seconds.
 
 ## Usage
 
@@ -62,6 +63,12 @@ Check worker health without sending a generation prompt:
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" health
 ```
 
+Warm enabled workers with the configured model, context window, and TTL:
+
+```powershell
+python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" warmup
+```
+
 Show JSON configuration:
 
 ```powershell
@@ -80,10 +87,10 @@ The configuration page supports:
 - changing base URLs,
 - enabling or disabling a worker,
 - setting slots per worker,
-- changing default model, timeout, max output tokens, and context window,
-- overriding model, timeout, max output tokens, and context window per worker.
+- changing default model, timeout, max output tokens, context window, and TTL,
+- overriding model, timeout, max output tokens, context window, and TTL per worker.
 
-The dispatcher does not shrink LM Studio's loaded model context. The `context_window` value records the intended ctx for sizing and diagnostics; the actual ctx is controlled by how the model is loaded in LM Studio. `max_tokens` means output budget only and is clamped to at least `32768`.
+The dispatcher warms models with the configured `context_window` and sends `ttl` on generation requests so LM Studio can unload the model after idle time. `max_tokens` means output budget only and is clamped to at least `32768`.
 
 If the default port is busy, `config-ui` automatically falls back to a free local port and prints the URL.
 

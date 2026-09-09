@@ -9,8 +9,8 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
-from dispatcher import Queue, drain, execute_job, render_config_page, runner_lock, status_summary, validate_tasks, worker_health
-from worker_config import DEFAULT_CONTEXT_WINDOW, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, normalize_config, save_config
+from dispatcher import Queue, drain, execute_job, render_config_page, runner_lock, status_summary, validate_tasks, worker_health, worker_warmup
+from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, normalize_config, save_config
 
 
 class DispatcherTests(unittest.TestCase):
@@ -140,22 +140,27 @@ os._exit(1)
         self.assertEqual([worker['slots'] for worker in enabled_workers(config)], [3, 3])
         self.assertEqual(config['max_tokens'], MIN_MAX_TOKENS)
         self.assertEqual(config['context_window'], DEFAULT_CONTEXT_WINDOW)
+        self.assertEqual(config['ttl'], DEFAULT_TTL_SECONDS)
         saved = save_config(self.root, {
             'model': 'local-model',
             'max_tokens': 2048,
             'context_window': DEFAULT_CONTEXT_WINDOW,
+            'ttl': DEFAULT_TTL_SECONDS,
             'timeout': 240,
             'workers': [
                 {'id': '21', 'name': 'Main', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 2, 'enabled': True},
-                {'id': 'lab', 'name': 'Lab', 'base_url': 'http://10.0.0.12:9999/v1', 'slots': 1, 'model': 'lab-model', 'max_tokens': 1024, 'timeout': 300, 'enabled': True},
+                {'id': 'lab', 'name': 'Lab', 'base_url': 'http://10.0.0.12:9999/v1', 'slots': 1, 'model': 'lab-model', 'max_tokens': 1024, 'context_window': 120000, 'ttl': 600, 'timeout': 300, 'enabled': True},
                 {'id': 'off', 'name': 'Off', 'base_url': 'http://127.0.0.1:1234/v1', 'slots': 0, 'enabled': True},
             ],
         })
         self.assertEqual(saved['model'], 'local-model')
         self.assertEqual(saved['max_tokens'], MIN_MAX_TOKENS)
         self.assertEqual(saved['context_window'], DEFAULT_CONTEXT_WINDOW)
+        self.assertEqual(saved['ttl'], DEFAULT_TTL_SECONDS)
         self.assertEqual(saved['workers'][1]['model'], 'lab-model')
         self.assertEqual(saved['workers'][1]['max_tokens'], MIN_MAX_TOKENS)
+        self.assertEqual(saved['workers'][1]['context_window'], 120000)
+        self.assertEqual(saved['workers'][1]['ttl'], 600)
         self.assertEqual(saved['workers'][1]['timeout'], 300)
         self.assertEqual([worker['id'] for worker in enabled_workers(saved)], ['21', 'lab'])
         self.q.sync_workers(saved['workers'])
@@ -168,8 +173,10 @@ os._exit(1)
         html = render_config_page(default_config())
         self.assertIn('Max output tokens', html)
         self.assertIn('Context window', html)
+        self.assertIn('TTL seconds', html)
         self.assertIn(str(MIN_MAX_TOKENS), html)
         self.assertIn(str(DEFAULT_CONTEXT_WINDOW), html)
+        self.assertIn(str(DEFAULT_TTL_SECONDS), html)
 
     def test_sync_workers_removes_stale_idle_workers(self):
         self.q.sync_workers([{'id': '21'}, {'id': '5'}])
@@ -200,19 +207,19 @@ os._exit(1)
     def test_per_worker_overrides_and_summary(self):
         self.q.add([{'id': 'pref-1', 'prompt': 'x'}, {'id': 'pref-2', 'prompt': 'x'}])
         calls = []
-        def fake(job, worker, directory, model, max_tokens, timeout, reasoning, base_url):
-            calls.append((worker, model, max_tokens, timeout, base_url))
+        def fake(job, worker, directory, model, max_tokens, timeout, reasoning, base_url, ttl):
+            calls.append((worker, model, max_tokens, timeout, base_url, ttl))
             time.sleep(.02)
             return 'done', {'content': 'ok'}
         workers = [
-            {'id': '21', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 1, 'model': 'fast', 'max_tokens': 512, 'timeout': 60},
+            {'id': '21', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 1, 'model': 'fast', 'max_tokens': 512, 'timeout': 60, 'ttl': 600},
             {'id': '33', 'base_url': 'http://192.168.88.33:1234/v1', 'slots': 1, 'model': '', 'max_tokens': 0, 'timeout': 0},
         ]
         self.q.sync_workers(workers)
         with contextlib.redirect_stdout(io.StringIO()):
             drain(self.q, self.root, execute=fake, workers=workers, model='default', max_tokens=4096, timeout=180)
-        self.assertIn(('21', 'fast', MIN_MAX_TOKENS, 60, 'http://192.168.88.21:1234/v1'), calls)
-        self.assertIn(('33', 'default', MIN_MAX_TOKENS, 180, 'http://192.168.88.33:1234/v1'), calls)
+        self.assertIn(('21', 'fast', MIN_MAX_TOKENS, 60, 'http://192.168.88.21:1234/v1', 600), calls)
+        self.assertIn(('33', 'default', MIN_MAX_TOKENS, 180, 'http://192.168.88.33:1234/v1', DEFAULT_TTL_SECONDS), calls)
         summary = status_summary(self.q, prefix='pref-', limit=1)
         self.assertEqual(summary['counts'], {'done': 2})
         self.assertEqual(summary['prefix'], 'pref-')
@@ -228,6 +235,14 @@ os._exit(1)
             result = worker_health(workers, timeout=1)
         self.assertFalse(result[0]['ok'])
         self.assertEqual(result[0]['models'], [])
+
+    def test_worker_warmup_parses_output(self):
+        completed = subprocess.CompletedProcess([], 0, json.dumps({'complete': True, 'model': 'm', 'content': 'OK', 'ttl': 900}), '')
+        workers = [{'id': '33', 'name': 'Bionic 33', 'base_url': 'http://192.168.88.33:1234/v1', 'slots': 3, 'enabled': True}]
+        with patch('dispatcher.subprocess.run', return_value=completed):
+            result = worker_warmup(workers, 'm', DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, timeout=1)
+        self.assertTrue(result[0]['ok'])
+        self.assertEqual(result[0]['ttl'], DEFAULT_TTL_SECONDS)
 
 
 if __name__ == '__main__':

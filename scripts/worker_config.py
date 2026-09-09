@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 DEFAULT_MODEL = "qwen3.8-9b-distill"
 MIN_MAX_TOKENS = 32768
 DEFAULT_CONTEXT_WINDOW = 230000
+DEFAULT_TTL_SECONDS = 900
 DEFAULT_WORKERS = [
     {
         "id": "21",
@@ -17,6 +18,7 @@ DEFAULT_WORKERS = [
         "model": "",
         "max_tokens": 0,
         "context_window": 0,
+        "ttl": 0,
         "timeout": 0,
         "enabled": True,
     },
@@ -28,6 +30,7 @@ DEFAULT_WORKERS = [
         "model": "",
         "max_tokens": 0,
         "context_window": 0,
+        "ttl": 0,
         "timeout": 0,
         "enabled": True,
     },
@@ -39,6 +42,7 @@ def default_config():
         "model": DEFAULT_MODEL,
         "max_tokens": MIN_MAX_TOKENS,
         "context_window": DEFAULT_CONTEXT_WINDOW,
+        "ttl": DEFAULT_TTL_SECONDS,
         "timeout": 180,
         "workers": [dict(worker) for worker in DEFAULT_WORKERS],
     }
@@ -75,11 +79,14 @@ def normalize_config(config):
         raise ValueError("Model must not be empty.")
     max_tokens = int(config.get("max_tokens") or MIN_MAX_TOKENS)
     context_window = int(config.get("context_window") or DEFAULT_CONTEXT_WINDOW)
+    ttl = int(config.get("ttl") or DEFAULT_TTL_SECONDS)
     timeout = int(config.get("timeout") or 180)
     if max_tokens < MIN_MAX_TOKENS:
         max_tokens = MIN_MAX_TOKENS
     if context_window < 1:
         raise ValueError("Context window must be positive.")
+    if ttl < 1:
+        raise ValueError("TTL must be positive.")
     if timeout < 1:
         raise ValueError("Timeout must be positive.")
     workers = config.get("workers")
@@ -102,9 +109,10 @@ def normalize_config(config):
         worker_model = str(worker.get("model") or "").strip()
         worker_max_tokens = int(worker.get("max_tokens") or 0)
         worker_context_window = int(worker.get("context_window") or 0)
+        worker_ttl = int(worker.get("ttl") or 0)
         worker_timeout = int(worker.get("timeout") or 0)
-        if worker_max_tokens < 0 or worker_context_window < 0 or worker_timeout < 0:
-            raise ValueError("Per-worker token budget, context window, and timeout must not be negative.")
+        if worker_max_tokens < 0 or worker_context_window < 0 or worker_ttl < 0 or worker_timeout < 0:
+            raise ValueError("Per-worker token budget, context window, TTL, and timeout must not be negative.")
         if worker_max_tokens and worker_max_tokens < MIN_MAX_TOKENS:
             worker_max_tokens = MIN_MAX_TOKENS
         normalized.append(
@@ -116,6 +124,7 @@ def normalize_config(config):
                 "model": worker_model,
                 "max_tokens": worker_max_tokens,
                 "context_window": worker_context_window,
+                "ttl": worker_ttl,
                 "timeout": worker_timeout,
                 "enabled": bool(worker.get("enabled")) and slots > 0,
             }
@@ -126,6 +135,7 @@ def normalize_config(config):
         "model": model,
         "max_tokens": max_tokens,
         "context_window": context_window,
+        "ttl": ttl,
         "timeout": timeout,
         "workers": normalized,
     }
