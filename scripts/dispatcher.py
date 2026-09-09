@@ -67,14 +67,14 @@ def runner_lock(path):
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def execute_job(job, worker, directory, model, max_tokens, timeout, reasoning, base_url=None, ttl=DEFAULT_TTL_SECONDS):
+def execute_job(job, worker, directory, model, max_tokens, timeout, reasoning, base_url=None, ttl=DEFAULT_TTL_SECONDS, context_window=DEFAULT_CONTEXT_WINDOW):
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.txt', dir=directory, delete=False) as prompt:
         prompt.write(job['prompt'])
         prompt_path = Path(prompt.name)
     try:
         command = [sys.executable, str(Path(__file__).with_name('client.py')), '--via-dispatcher',
                    '--prompt-file', str(prompt_path), '--model', model, '--max-tokens', str(max_tokens),
-                   '--timeout', str(timeout), '--ttl', str(ttl)]
+                   '--timeout', str(timeout), '--ttl', str(ttl), '--context-window', str(context_window)]
         if base_url:
             command.extend(['--base-url', base_url])
         else:
@@ -119,7 +119,7 @@ def ensure_runner(directory):
     return 'starting'
 
 
-def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qwen3.8-9b-distill', max_tokens=MIN_MAX_TOKENS, timeout=180, ttl=DEFAULT_TTL_SECONDS, reasoning='openai', workers=None):
+def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qwen3.8-9b-distill', max_tokens=MIN_MAX_TOKENS, timeout=900, ttl=DEFAULT_TTL_SECONDS, context_window=DEFAULT_CONTEXT_WINDOW, reasoning='openai', workers=None):
     if workers is None:
         workers = [{'id': '21', 'base_url': None, 'slots': slots}, {'id': '33', 'base_url': None, 'slots': slots}]
     stop = threading.Event()
@@ -142,13 +142,14 @@ def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qw
                     worker_max_tokens = MIN_MAX_TOKENS
                 worker_timeout = worker.get('timeout') or timeout
                 worker_ttl = worker.get('ttl') or ttl
+                worker_context = worker.get('context_window') or context_window
                 status, result = execute(
                     job, worker_id, directory, worker_model, worker_max_tokens,
-                    worker_timeout, reasoning, worker.get('base_url'), worker_ttl
+                    worker_timeout, reasoning, worker.get('base_url'), worker_ttl, worker_context
                 )
             except Exception as exc:
                 status, result = 'uncertain', {'error': str(exc)[:1000]}
-            queue.finish(job['id'], status, result)
+            queue.finish(job['id'], status, result, block_worker=False)
             with output_lock:
                 emit({'event': status, 'id': job['id'], 'worker': worker_id})
     max_workers = sum(worker['slots'] for worker in workers)
@@ -383,7 +384,7 @@ def form_to_config(form):
         'max_tokens': int(form.get('max_tokens', [str(MIN_MAX_TOKENS)])[0] or MIN_MAX_TOKENS),
         'context_window': int(form.get('context_window', [str(DEFAULT_CONTEXT_WINDOW)])[0] or DEFAULT_CONTEXT_WINDOW),
         'ttl': int(form.get('ttl', [str(DEFAULT_TTL_SECONDS)])[0] or DEFAULT_TTL_SECONDS),
-        'timeout': int(form.get('timeout', ['180'])[0] or 180),
+        'timeout': int(form.get('timeout', ['900'])[0] or 900),
         'workers': workers,
     }
 
@@ -503,6 +504,7 @@ def main():
             configured = enabled_workers(config)
             return drain(queue, args.home, args.slots, args.watch, model=args.model or config['model'],
                          max_tokens=max_tokens, timeout=timeout, ttl=config['ttl'],
+                         context_window=config['context_window'],
                          reasoning=args.reasoning, workers=configured)
     return 0
 

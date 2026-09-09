@@ -43,7 +43,7 @@ def default_config():
         "max_tokens": MIN_MAX_TOKENS,
         "context_window": DEFAULT_CONTEXT_WINDOW,
         "ttl": DEFAULT_TTL_SECONDS,
-        "timeout": 180,
+        "timeout": 900,
         "workers": [dict(worker) for worker in DEFAULT_WORKERS],
     }
 
@@ -80,7 +80,7 @@ def normalize_config(config):
     max_tokens = int(config.get("max_tokens") or MIN_MAX_TOKENS)
     context_window = int(config.get("context_window") or DEFAULT_CONTEXT_WINDOW)
     ttl = int(config.get("ttl") or DEFAULT_TTL_SECONDS)
-    timeout = int(config.get("timeout") or 180)
+    timeout = int(config.get("timeout") or 900)
     if max_tokens < MIN_MAX_TOKENS:
         max_tokens = MIN_MAX_TOKENS
     if context_window < 1:

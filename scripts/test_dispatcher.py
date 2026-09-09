@@ -50,6 +50,13 @@ class DispatcherTests(unittest.TestCase):
         self.q.unblock('21')
         self.assertEqual(self.q.claim('21')['id'], '2')
 
+    def test_job_uncertain_does_not_block_worker_slots(self):
+        self.q.add([{'id': str(i), 'prompt': 'x'} for i in range(2)])
+        self.q.claim('21')
+        self.q.finish('0', 'uncertain', {'error': 'client timeout'}, block_worker=False)
+        self.assertEqual(self.q.claim('21')['id'], '1')
+        self.assertFalse(self.q.workers()[0]['blocked'])
+
     def test_single_runner_and_exception_release(self):
         lock = self.root / 'runner.lock'
         with runner_lock(lock):
@@ -207,19 +214,19 @@ os._exit(1)
     def test_per_worker_overrides_and_summary(self):
         self.q.add([{'id': 'pref-1', 'prompt': 'x'}, {'id': 'pref-2', 'prompt': 'x'}])
         calls = []
-        def fake(job, worker, directory, model, max_tokens, timeout, reasoning, base_url, ttl):
-            calls.append((worker, model, max_tokens, timeout, base_url, ttl))
+        def fake(job, worker, directory, model, max_tokens, timeout, reasoning, base_url, ttl, context_window):
+            calls.append((worker, model, max_tokens, timeout, base_url, ttl, context_window))
             time.sleep(.02)
             return 'done', {'content': 'ok'}
         workers = [
-            {'id': '21', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 1, 'model': 'fast', 'max_tokens': 512, 'timeout': 60, 'ttl': 600},
+            {'id': '21', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 1, 'model': 'fast', 'max_tokens': 512, 'timeout': 60, 'ttl': 600, 'context_window': 120000},
             {'id': '33', 'base_url': 'http://192.168.88.33:1234/v1', 'slots': 1, 'model': '', 'max_tokens': 0, 'timeout': 0},
         ]
         self.q.sync_workers(workers)
         with contextlib.redirect_stdout(io.StringIO()):
-            drain(self.q, self.root, execute=fake, workers=workers, model='default', max_tokens=4096, timeout=180)
-        self.assertIn(('21', 'fast', MIN_MAX_TOKENS, 60, 'http://192.168.88.21:1234/v1', 600), calls)
-        self.assertIn(('33', 'default', MIN_MAX_TOKENS, 180, 'http://192.168.88.33:1234/v1', DEFAULT_TTL_SECONDS), calls)
+            drain(self.q, self.root, execute=fake, workers=workers, model='default', max_tokens=4096, timeout=900)
+        self.assertIn(('21', 'fast', MIN_MAX_TOKENS, 60, 'http://192.168.88.21:1234/v1', 600, 120000), calls)
+        self.assertIn(('33', 'default', MIN_MAX_TOKENS, 900, 'http://192.168.88.33:1234/v1', DEFAULT_TTL_SECONDS, DEFAULT_CONTEXT_WINDOW), calls)
         summary = status_summary(self.q, prefix='pref-', limit=1)
         self.assertEqual(summary['counts'], {'done': 2})
         self.assertEqual(summary['prefix'], 'pref-')

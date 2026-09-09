@@ -51,7 +51,7 @@ def main():
     parser.add_argument("--model", default="qwen3.8-9b-distill")
     parser.add_argument("--via-dispatcher", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--max-tokens", type=positive, default=4096)
-    parser.add_argument("--timeout", type=positive, default=180)
+    parser.add_argument("--timeout", type=positive, default=900)
     parser.add_argument("--context-window", type=positive, default=DEFAULT_CONTEXT_WINDOW)
     parser.add_argument("--ttl", type=positive, default=DEFAULT_TTL_SECONDS)
     parser.add_argument("--reasoning", choices=("off", "on"),
@@ -112,6 +112,7 @@ def main():
             "max_tokens": args.max_tokens,
             "stream": False,
             "ttl": args.ttl,
+            "context_length": args.context_window,
         }
         if args.reasoning is not None:
             result = request_json(args.base_url.removesuffix("/v1"), "/api/v1/chat", {
@@ -139,7 +140,9 @@ def main():
             raise ValueError("API returned non-text content.")
         reason = choice.get("finish_reason")
         complete = bool(content.strip()) and reason == "stop"
-        print(json.dumps({"base_url": args.base_url, "model": result.get("model", args.model), "content": content,
+        print(json.dumps({"base_url": args.base_url, "model": result.get("model", args.model),
+                          "context_window_requested": args.context_window,
+                          "ttl": args.ttl, "content": content,
                           "finish_reason": reason, "complete": complete}, ensure_ascii=False))
         return 0 if complete else 3
     except HTTPError as error:

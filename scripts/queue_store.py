@@ -51,7 +51,7 @@ class Queue:
             db.execute("UPDATE jobs SET status='running',worker=? WHERE id=?", (worker, row['id']))
             return {**dict(row), 'status': 'running', 'worker': worker}
 
-    def finish(self, job_id, status, result):
+    def finish(self, job_id, status, result, block_worker=True):
         if status not in ('done', 'incomplete', 'uncertain'):
             raise ValueError('Invalid result status')
         with closing(self.connect()) as db, db:
@@ -60,12 +60,44 @@ class Queue:
             if row is None:
                 raise ValueError('Unknown job')
             db.execute('UPDATE jobs SET status=?,result=? WHERE id=?', (status, json.dumps(result, ensure_ascii=False), job_id))
-            if status == 'uncertain':
+            if status == 'uncertain' and block_worker:
                 db.execute('UPDATE workers SET blocked=1,note=? WHERE id=?', ('Uncertain request: ' + job_id, row['worker']))
 
     def status(self):
         with closing(self.connect()) as db:
             return [dict(r) for r in db.execute('SELECT id,worker,status,created FROM jobs ORDER BY created,rowid')]
+
+    def list_jobs(self, prefix='', status='', limit=50):
+        sql = 'SELECT id,worker,status,created FROM jobs WHERE 1=1'
+        args = []
+        if prefix:
+            sql += ' AND id LIKE ?'
+            args.append(prefix + '%')
+        if status:
+            sql += ' AND status=?'
+            args.append(status)
+        sql += ' ORDER BY created,rowid LIMIT ?'
+        args.append(limit)
+        with closing(self.connect()) as db:
+            return [dict(r) for r in db.execute(sql, args)]
+
+    def export_results(self, prefix='', status=''):
+        sql = 'SELECT id,worker,status,result,created FROM jobs WHERE result IS NOT NULL'
+        args = []
+        if prefix:
+            sql += ' AND id LIKE ?'
+            args.append(prefix + '%')
+        if status:
+            sql += ' AND status=?'
+            args.append(status)
+        sql += ' ORDER BY created,rowid'
+        with closing(self.connect()) as db:
+            rows = []
+            for row in db.execute(sql, args):
+                item = dict(row)
+                item['result'] = json.loads(item['result']) if item['result'] else None
+                rows.append(item)
+            return rows
 
     def workers(self):
         with closing(self.connect()) as db:
