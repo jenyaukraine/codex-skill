@@ -8,8 +8,9 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 from unittest.mock import patch
-from dispatcher import Queue, drain, execute_job, render_config_page, runner_lock, should_block_worker, status_summary, validate_tasks, worker_health, worker_warmup
+from dispatcher import Queue, auto_resume_worker, drain, execute_job, render_config_page, runner_lock, should_block_worker, status_summary, validate_tasks, worker_health, worker_warmup
 from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, normalize_config, save_config
 
 
@@ -73,6 +74,52 @@ class DispatcherTests(unittest.TestCase):
         )
         self.assertIsNone(self.q.claim('21'))
         self.assertEqual(self.q.claim('33')['id'], '1')
+
+    def test_auto_resume_unblocks_idle_worker_when_model_is_available(self):
+        self.q.add([{'id': str(i), 'prompt': 'x'} for i in range(2)])
+        job = self.q.claim('21')
+        self.q.finish(
+            job['id'],
+            'uncertain',
+            {'error': 'Local API or input file unavailable: Remote end closed connection without response'},
+            block_worker=True,
+        )
+        self.assertTrue(self.q.worker_blocked('21'))
+        worker = {
+            'id': '21',
+            'name': 'Main',
+            'base_url': 'http://192.168.88.21:1234/v1',
+            'slots': 12,
+            'enabled': True,
+            'model': 'qwen3.8-9b-distill@q4_k_m',
+        }
+        missing = subprocess.CompletedProcess([], 0, json.dumps({'models': ['other-model']}), '')
+        with patch('dispatcher.subprocess.run', return_value=missing):
+            self.assertFalse(auto_resume_worker(self.q, worker, 'qwen3.8-9b-distill', timeout=1))
+        self.assertTrue(self.q.worker_blocked('21'))
+        present = subprocess.CompletedProcess([], 0, json.dumps({'models': ['qwen3.8-9b-distill@q4_k_m']}), '')
+        with patch('dispatcher.subprocess.run', return_value=present):
+            self.assertTrue(auto_resume_worker(self.q, worker, 'qwen3.8-9b-distill', timeout=1))
+        self.assertFalse(self.q.worker_blocked('21'))
+        self.assertEqual(self.q.claim('21')['id'], '1')
+
+    def test_auto_resume_does_not_unblock_worker_with_running_job(self):
+        self.q.add([{'id': '0', 'prompt': 'x'}])
+        self.q.claim('21')
+        with closing(self.q.connect()) as db, db:
+            db.execute("UPDATE workers SET blocked=1,note='manual test' WHERE id='21'")
+        worker = {
+            'id': '21',
+            'name': 'Main',
+            'base_url': 'http://192.168.88.21:1234/v1',
+            'slots': 12,
+            'enabled': True,
+            'model': 'qwen3.8-9b-distill@q4_k_m',
+        }
+        present = subprocess.CompletedProcess([], 0, json.dumps({'models': ['qwen3.8-9b-distill@q4_k_m']}), '')
+        with patch('dispatcher.subprocess.run', return_value=present):
+            self.assertFalse(auto_resume_worker(self.q, worker, 'qwen3.8-9b-distill', timeout=1))
+        self.assertTrue(self.q.worker_blocked('21'))
 
     def test_single_runner_and_exception_release(self):
         lock = self.root / 'runner.lock'

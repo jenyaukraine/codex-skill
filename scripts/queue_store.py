@@ -103,6 +103,11 @@ class Queue:
         with closing(self.connect()) as db:
             return [dict(r) for r in db.execute('SELECT * FROM workers ORDER BY id')]
 
+    def worker_blocked(self, worker):
+        with closing(self.connect()) as db:
+            row = db.execute('SELECT blocked FROM workers WHERE id=?', (worker,)).fetchone()
+            return bool(row and row['blocked'])
+
     def result(self, job_id):
         with closing(self.connect()) as db:
             row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -124,3 +129,14 @@ class Queue:
             if db.execute("SELECT 1 FROM jobs WHERE status='running' AND worker=?", (worker,)).fetchone():
                 raise ValueError('Worker still has running jobs')
             db.execute('UPDATE workers SET blocked=0,note=? WHERE id=?', (note, worker))
+
+    def unblock_if_idle(self, worker, note='Auto-resumed'):
+        with closing(self.connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute("SELECT 1 FROM jobs WHERE status='running' AND worker=?", (worker,)).fetchone():
+                return False
+            updated = db.execute(
+                'UPDATE workers SET blocked=0,note=? WHERE id=? AND blocked=1',
+                (note, worker),
+            ).rowcount
+            return updated > 0

@@ -19,6 +19,8 @@ from queue_store import Queue
 from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, save_config
 
 DEFAULT_HOME = Path(__file__).resolve().parents[3] / 'bionic-dispatcher'
+AUTO_RESUME_INTERVAL_SECONDS = 20
+AUTO_RESUME_HEALTH_TIMEOUT_SECONDS = 5
 
 
 def validate_tasks(tasks, worker_ids=None):
@@ -140,9 +142,32 @@ def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qw
         workers = [{'id': '21', 'base_url': None, 'slots': slots}, {'id': '33', 'base_url': None, 'slots': slots}]
     stop = threading.Event()
     output_lock = threading.Lock()
+    probe_lock = threading.Lock()
+    last_probe = {}
+
+    def maybe_auto_resume(worker):
+        if not watch:
+            return
+        worker_id = worker['id']
+        now = time.monotonic()
+        with probe_lock:
+            if now - last_probe.get(worker_id, 0) < AUTO_RESUME_INTERVAL_SECONDS:
+                return
+            last_probe[worker_id] = now
+        try:
+            resumed = auto_resume_worker(queue, worker, model)
+        except Exception as exc:
+            with output_lock:
+                emit({'event': 'auto_resume_probe_failed', 'worker': worker_id, 'error': str(exc)[:1000]})
+            return
+        if resumed:
+            with output_lock:
+                emit({'event': 'auto_resumed', 'worker': worker_id})
+
     def slot(worker):
         worker_id = worker['id']
         while not stop.is_set():
+            maybe_auto_resume(worker)
             job = queue.claim(worker_id)
             if job is None:
                 if watch:
@@ -310,6 +335,19 @@ def worker_warmup(workers, model, context_window, ttl, timeout=60):
             'error': '' if result.returncode == 0 else (result.stderr.strip() or result.stdout.strip())[:1000],
         })
     return results
+
+
+def auto_resume_worker(queue, worker, default_model, timeout=AUTO_RESUME_HEALTH_TIMEOUT_SECONDS):
+    if not queue.worker_blocked(worker['id']):
+        return False
+    result = worker_health([worker], timeout=timeout)[0]
+    required_model = worker.get('model') or default_model
+    if not result.get('ok') or required_model not in result.get('models', []):
+        return False
+    return queue.unblock_if_idle(
+        worker['id'],
+        f"Auto-resumed: /models ok and {required_model} available",
+    )
 
 
 def render_config_page(config, message=''):
