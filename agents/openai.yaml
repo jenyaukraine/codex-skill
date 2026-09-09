@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bionic Dispatcher"
+  short_description: "Общая очередь: два воркера, по три запроса на каждый"
+  default_prompt: "Используй $bionic-local: добавь независимые задания через dispatcher.py add, пополняй общую очередь и проверяй результаты перед применением."

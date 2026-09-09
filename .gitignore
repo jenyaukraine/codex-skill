@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.log
+*.sqlite3
+queue.sqlite3
+runner.lock
+tmp/
+temp/
