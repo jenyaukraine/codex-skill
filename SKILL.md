@@ -25,6 +25,8 @@ User preference: proactively delegate useful independent parts of the current au
 
 Aggressive utilization preference: keep the shared queue warm whenever there is any useful independent work, even a micro-opportunity. If a task can be split into reviewable text-only units such as edge-case audit, route check, CSS critique, SQL query review, test-case draft, migration risk, copy pass, acceptance checklist, or implementation sketch, enqueue it instead of leaving workers idle. Prefer small bounded tasks with concrete acceptance criteria over waiting for a large perfect batch. Top up the queue opportunistically while Codex continues integration work, unless enough `done` results are already awaiting review that acceptance work is clearly the bottleneck.
 
+Always-warm queue preference: when the user explicitly wants the local workers heavily used, maintain a backlog of about six small ready tasks whenever there is useful independent work left. After checking `summary`, if both hosts are idle or the queue is empty, enqueue another short manifest immediately instead of waiting for a perfect batch. If a host is blocked and the user says workers are idle, standing, restarted, or not generating, unblock the host and refill the queue in the same turn. Use focused microtasks that can finish quickly and be reviewed independently.
+
 Frontier token saving preference: when the user wants lower frontier-token use, operate in local-worker-first mode. Codex keeps repo reading, edits, tests, browser verification, and final decisions, while workers draft audits, specs, test cases, risk registers, implementation sketches, and acceptance checklists. Keep prompts short and module-scoped so local models finish reliably.
 
 ## Responsibilities and boundaries
