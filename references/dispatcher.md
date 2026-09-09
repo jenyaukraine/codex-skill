@@ -34,7 +34,9 @@ Defaults:
 - `21`: `http://192.168.88.21:1234/v1`, `slots: 3`
 - `33`: `http://192.168.88.33:1234/v1`, `slots: 3`
 
-Open the local configuration page with `config-ui`. It allows adding local/LAN machines, editing base URLs, enabling/disabling workers, setting slots per worker, and overriding model, timeout, and max tokens per worker. Set slots to `0` or disable a worker to keep it out of dispatch. Existing watch runners should be restarted to apply changed slot counts. If the requested UI port is busy, `config-ui` binds a free local fallback port and prints it.
+Open the local configuration page with `config-ui`. It allows adding local/LAN machines, editing base URLs, enabling/disabling workers, setting slots per worker, and overriding model, timeout, max output tokens, and context window per worker. Set slots to `0` or disable a worker to keep it out of dispatch. Existing watch runners should be restarted to apply changed slot counts. If the requested UI port is busy, `config-ui` binds a free local fallback port and prints it.
+
+Default context window is `230000` for planning and diagnostics. This is not sent as a random OpenAI chat parameter and does not shrink the model; LM Studio controls the actual ctx at model load time. `max_tokens` is only the response/output budget and is clamped to at least `32768`.
 
 ## State and interpretation
 
@@ -56,10 +58,10 @@ Do not call these during ordinary task submission:
 - `run` without `--watch`: drains a batch then exits. Do not use it for interactive work.
 - `add --no-start`: insert only, for isolated test queues.
 - `--home <directory>` before a command: isolated queue for tests; do not use alternate homes for live work while the main dispatcher runs.
-- `unblock 21 --note "Operator confirmed generation stopped"`: only after actual operator confirmation. Does not retry uncertain jobs.
+- `unblock 21 --note "Operator confirmed generation stopped"`: after actual operator confirmation. User reports that a host is idle, restarted, or not generating are sufficient confirmation; do not ask again in that case. Does not retry uncertain jobs.
 
-Never kill a worker or silently repeat timed-out work. If the runner process exits while requests are outstanding, the next start marks interrupted requests uncertain. Keep the default queue across sessions so those records remain visible. The background runner is reusable; its idle state consumes no model requests.
+Never kill a worker or silently repeat timed-out work. If the runner process exits while requests are outstanding, the next start marks interrupted requests uncertain. Keep the default queue across sessions so those records remain visible. The background runner is reusable; its idle state consumes no model requests. If the user says the upstream worker is idle or was restarted, unblock the paused host directly.
 
 `client.py` is an internal text transport. For read-only model discovery only: `python <skill>/scripts/client.py --worker 21 --models`. Do not send generation through it, raw HTTP, project helper scripts, or multiple queue processes.
 
-Default model: qwen3.8-9b-distill; OpenAI-compatible chat transport; token limit 4096; timeout 180 seconds. Do not use qwen3.8-9b-coder for this queue; it returns LM Studio server errors. Pass `run --reasoning off` only for models verified with LM Studio's native chat endpoint. Live defaults are centralized in `config.json`, falling back to `worker_config.py` defaults. Prefer `summary` over full `status` when the queue is large. Tests: `python -m unittest test_dispatcher -v` from the skill scripts directory.
+Default model: qwen3.8-9b-distill; OpenAI-compatible chat transport; max output tokens 32768 minimum; context window 230000; timeout 180 seconds. Do not use qwen3.8-9b-coder for this queue; it returns LM Studio server errors. Pass `run --reasoning off` only for models verified with LM Studio's native chat endpoint. Live defaults are centralized in `config.json`, falling back to `worker_config.py` defaults. Prefer `summary` over full `status` when the queue is large. Tests: `python -m unittest test_dispatcher -v` from the skill scripts directory.

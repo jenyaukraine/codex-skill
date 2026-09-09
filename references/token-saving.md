@@ -46,6 +46,6 @@ Avoid sending long source files unless the worker truly needs them. Summarize in
 
 ## Reliability
 
-If a worker repeatedly times out, reduce its slots, lower per-worker max tokens, or increase its per-worker timeout in `config-ui`. Do not bypass the dispatcher or manually send generation requests.
+If a worker repeatedly times out, reduce its slots or increase its per-worker timeout in `config-ui`. Do not bypass the dispatcher, lower output below the `32768` minimum, or manually send generation requests.
 
-`uncertain` means the host is paused because the upstream request might still be running. Only unblock after the operator confirms the upstream generation has stopped or the worker was restarted.
+`uncertain` means the host is paused because the upstream request might still be running. Unblock after the operator confirms the upstream generation has stopped or the worker was restarted. Treat direct user reports that a host is idle, restarted, or not generating as that confirmation.

@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 import webbrowser
 from queue_store import Queue
-from worker_config import default_config, enabled_workers, load_config, save_config
+from worker_config import DEFAULT_CONTEXT_WINDOW, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, save_config
 
 DEFAULT_HOME = Path(__file__).resolve().parents[3] / 'bionic-dispatcher'
 
@@ -119,7 +119,7 @@ def ensure_runner(directory):
     return 'starting'
 
 
-def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qwen3.8-9b-distill', max_tokens=4096, timeout=180, reasoning='openai', workers=None):
+def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qwen3.8-9b-distill', max_tokens=MIN_MAX_TOKENS, timeout=180, reasoning='openai', workers=None):
     if workers is None:
         workers = [{'id': '21', 'base_url': None, 'slots': slots}, {'id': '33', 'base_url': None, 'slots': slots}]
     stop = threading.Event()
@@ -138,6 +138,8 @@ def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qw
             try:
                 worker_model = worker.get('model') or model
                 worker_max_tokens = worker.get('max_tokens') or max_tokens
+                if worker_max_tokens < MIN_MAX_TOKENS:
+                    worker_max_tokens = MIN_MAX_TOKENS
                 worker_timeout = worker.get('timeout') or timeout
                 status, result = execute(
                     job, worker_id, directory, worker_model, worker_max_tokens,
@@ -245,6 +247,7 @@ def render_config_page(config, message=''):
           <td><input type="number" min="0" max="8" name="slots_{index}" value="{worker['slots']}" required></td>
           <td><input name="model_{index}" value="{escape(worker.get('model', ''))}" placeholder="default"></td>
           <td><input type="number" min="0" name="max_tokens_{index}" value="{worker.get('max_tokens', 0)}"></td>
+          <td><input type="number" min="0" name="context_window_{index}" value="{worker.get('context_window', 0)}"></td>
           <td><input type="number" min="0" name="timeout_{index}" value="{worker.get('timeout', 0)}"></td>
           <td><input type="checkbox" name="enabled_{index}" {checked}></td>
         </tr>""")
@@ -278,17 +281,18 @@ button,.button {{ border:0; border-radius:8px; background:var(--green); color:wh
 <form method="post">
   <div class="grid">
     <div><label>Default model</label><input name="model" value="{escape(config['model'])}" required></div>
-    <div><label>Max tokens</label><input type="number" min="1" name="max_tokens" value="{config['max_tokens']}" required></div>
+    <div><label>Max output tokens</label><input type="number" min="{MIN_MAX_TOKENS}" name="max_tokens" value="{config['max_tokens']}" required></div>
+    <div><label>Context window</label><input type="number" min="1" name="context_window" value="{config.get('context_window', DEFAULT_CONTEXT_WINDOW)}" required></div>
     <div><label>Timeout seconds</label><input type="number" min="1" name="timeout" value="{config['timeout']}" required></div>
   </div>
   <table>
-    <thead><tr><th>ID</th><th>Name</th><th>Base URL</th><th>Slots</th><th>Model</th><th>Tokens</th><th>Timeout</th><th>Enabled</th></tr></thead>
+    <thead><tr><th>ID</th><th>Name</th><th>Base URL</th><th>Slots</th><th>Model</th><th>Output</th><th>Ctx</th><th>Timeout</th><th>Enabled</th></tr></thead>
     <tbody>{''.join(worker_rows)}
-      <tr><td><input name="id_new" placeholder="new-id"></td><td><input name="name_new" placeholder="New worker"></td><td><input name="base_url_new" placeholder="http://192.168.88.50:1234/v1"></td><td><input type="number" min="0" max="8" name="slots_new" value="1"></td><td><input name="model_new" placeholder="default"></td><td><input type="number" min="0" name="max_tokens_new" value="0"></td><td><input type="number" min="0" name="timeout_new" value="0"></td><td><input type="checkbox" name="enabled_new"></td></tr>
+      <tr><td><input name="id_new" placeholder="new-id"></td><td><input name="name_new" placeholder="New worker"></td><td><input name="base_url_new" placeholder="http://192.168.88.50:1234/v1"></td><td><input type="number" min="0" max="8" name="slots_new" value="1"></td><td><input name="model_new" placeholder="default"></td><td><input type="number" min="0" name="max_tokens_new" value="0"></td><td><input type="number" min="0" name="context_window_new" value="0"></td><td><input type="number" min="0" name="timeout_new" value="0"></td><td><input type="checkbox" name="enabled_new"></td></tr>
     </tbody>
   </table>
   <div class="actions"><button>Save configuration</button><a class="button secondary" href="/">Reload</a></div>
-  <p class="hint">Set slots to 0 or disable a flaky machine. Uncertain running requests still require manual unblock after the upstream generation is stopped.</p>
+  <p class="hint">Output tokens are clamped to at least {MIN_MAX_TOKENS}. Context window defaults to {DEFAULT_CONTEXT_WINDOW} and is used for planning/diagnostics; LM Studio model loading controls the actual ctx. Set slots to 0 or disable a flaky machine.</p>
 </form></section></main></body></html>"""
 
 
@@ -307,12 +311,14 @@ def form_to_config(form):
             'slots': int(form.get('slots_' + index, ['0'])[0] or 0),
             'model': form.get('model_' + index, [''])[0],
             'max_tokens': int(form.get('max_tokens_' + index, ['0'])[0] or 0),
+            'context_window': int(form.get('context_window_' + index, ['0'])[0] or 0),
             'timeout': int(form.get('timeout_' + index, ['0'])[0] or 0),
             'enabled': ('enabled_' + index) in form,
         })
     return {
         'model': form.get('model', [''])[0],
-        'max_tokens': int(form.get('max_tokens', ['4096'])[0] or 4096),
+        'max_tokens': int(form.get('max_tokens', [str(MIN_MAX_TOKENS)])[0] or MIN_MAX_TOKENS),
+        'context_window': int(form.get('context_window', [str(DEFAULT_CONTEXT_WINDOW)])[0] or DEFAULT_CONTEXT_WINDOW),
         'timeout': int(form.get('timeout', ['180'])[0] or 180),
         'workers': workers,
     }
@@ -419,8 +425,10 @@ def main():
     elif args.command == 'run':
         max_tokens = args.max_tokens or config['max_tokens']
         timeout = args.timeout or config['timeout']
-        if timeout < 1 or max_tokens < 1:
-            raise ValueError('Timeout and token budget must be positive')
+        if timeout < 1:
+            raise ValueError('Timeout must be positive')
+        if max_tokens < MIN_MAX_TOKENS:
+            max_tokens = MIN_MAX_TOKENS
         # One runner across all queue directories protects the physical worker caps.
         with runner_lock(DEFAULT_HOME / 'runner.lock'):
             queue.recover()

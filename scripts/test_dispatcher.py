@@ -9,8 +9,8 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
-from dispatcher import Queue, drain, execute_job, runner_lock, status_summary, validate_tasks, worker_health
-from worker_config import default_config, enabled_workers, load_config, normalize_config, save_config
+from dispatcher import Queue, drain, execute_job, render_config_page, runner_lock, status_summary, validate_tasks, worker_health
+from worker_config import DEFAULT_CONTEXT_WINDOW, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, normalize_config, save_config
 
 
 class DispatcherTests(unittest.TestCase):
@@ -138,9 +138,12 @@ os._exit(1)
         config = load_config(self.root)
         self.assertEqual([worker['id'] for worker in config['workers']], ['21', '33'])
         self.assertEqual([worker['slots'] for worker in enabled_workers(config)], [3, 3])
+        self.assertEqual(config['max_tokens'], MIN_MAX_TOKENS)
+        self.assertEqual(config['context_window'], DEFAULT_CONTEXT_WINDOW)
         saved = save_config(self.root, {
             'model': 'local-model',
             'max_tokens': 2048,
+            'context_window': DEFAULT_CONTEXT_WINDOW,
             'timeout': 240,
             'workers': [
                 {'id': '21', 'name': 'Main', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 2, 'enabled': True},
@@ -149,8 +152,10 @@ os._exit(1)
             ],
         })
         self.assertEqual(saved['model'], 'local-model')
+        self.assertEqual(saved['max_tokens'], MIN_MAX_TOKENS)
+        self.assertEqual(saved['context_window'], DEFAULT_CONTEXT_WINDOW)
         self.assertEqual(saved['workers'][1]['model'], 'lab-model')
-        self.assertEqual(saved['workers'][1]['max_tokens'], 1024)
+        self.assertEqual(saved['workers'][1]['max_tokens'], MIN_MAX_TOKENS)
         self.assertEqual(saved['workers'][1]['timeout'], 300)
         self.assertEqual([worker['id'] for worker in enabled_workers(saved)], ['21', 'lab'])
         self.q.sync_workers(saved['workers'])
@@ -158,6 +163,13 @@ os._exit(1)
         validate_tasks([{'id': 'new-worker', 'prompt': 'x', 'worker': 'lab'}], {'21', 'lab'})
         with self.assertRaises(ValueError):
             normalize_config({'workers': [{'id': 'bad', 'base_url': 'https://example.com/v1', 'slots': 1, 'enabled': True}]})
+
+    def test_config_ui_labels_context_and_output_separately(self):
+        html = render_config_page(default_config())
+        self.assertIn('Max output tokens', html)
+        self.assertIn('Context window', html)
+        self.assertIn(str(MIN_MAX_TOKENS), html)
+        self.assertIn(str(DEFAULT_CONTEXT_WINDOW), html)
 
     def test_sync_workers_removes_stale_idle_workers(self):
         self.q.sync_workers([{'id': '21'}, {'id': '5'}])
@@ -199,8 +211,8 @@ os._exit(1)
         self.q.sync_workers(workers)
         with contextlib.redirect_stdout(io.StringIO()):
             drain(self.q, self.root, execute=fake, workers=workers, model='default', max_tokens=4096, timeout=180)
-        self.assertIn(('21', 'fast', 512, 60, 'http://192.168.88.21:1234/v1'), calls)
-        self.assertIn(('33', 'default', 4096, 180, 'http://192.168.88.33:1234/v1'), calls)
+        self.assertIn(('21', 'fast', MIN_MAX_TOKENS, 60, 'http://192.168.88.21:1234/v1'), calls)
+        self.assertIn(('33', 'default', MIN_MAX_TOKENS, 180, 'http://192.168.88.33:1234/v1'), calls)
         summary = status_summary(self.q, prefix='pref-', limit=1)
         self.assertEqual(summary['counts'], {'done': 2})
         self.assertEqual(summary['prefix'], 'pref-')

@@ -20,6 +20,8 @@ Codex skill for using two local LM Studio/Bionic workers through one durable sha
 - `localhost:1234/v1` is the same physical machine as `21`, not a third worker.
 
 Default model: `qwen3.8-9b-distill`.
+Default context window for planning/diagnostics: `230000`.
+Minimum max output tokens: `32768`.
 
 ## Usage
 
@@ -78,8 +80,10 @@ The configuration page supports:
 - changing base URLs,
 - enabling or disabling a worker,
 - setting slots per worker,
-- changing default model, timeout, and token budget,
-- overriding model, timeout, and token budget per worker.
+- changing default model, timeout, max output tokens, and context window,
+- overriding model, timeout, max output tokens, and context window per worker.
+
+The dispatcher does not shrink LM Studio's loaded model context. The `context_window` value records the intended ctx for sizing and diagnostics; the actual ctx is controlled by how the model is loaded in LM Studio. `max_tokens` means output budget only and is clamped to at least `32768`.
 
 If the default port is busy, `config-ui` automatically falls back to a free local port and prints the URL.
 

@@ -6,6 +6,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 DEFAULT_MODEL = "qwen3.8-9b-distill"
+MIN_MAX_TOKENS = 32768
+DEFAULT_CONTEXT_WINDOW = 230000
 DEFAULT_WORKERS = [
     {
         "id": "21",
@@ -14,6 +16,7 @@ DEFAULT_WORKERS = [
         "slots": 3,
         "model": "",
         "max_tokens": 0,
+        "context_window": 0,
         "timeout": 0,
         "enabled": True,
     },
@@ -24,6 +27,7 @@ DEFAULT_WORKERS = [
         "slots": 3,
         "model": "",
         "max_tokens": 0,
+        "context_window": 0,
         "timeout": 0,
         "enabled": True,
     },
@@ -33,7 +37,8 @@ DEFAULT_WORKERS = [
 def default_config():
     return {
         "model": DEFAULT_MODEL,
-        "max_tokens": 4096,
+        "max_tokens": MIN_MAX_TOKENS,
+        "context_window": DEFAULT_CONTEXT_WINDOW,
         "timeout": 180,
         "workers": [dict(worker) for worker in DEFAULT_WORKERS],
     }
@@ -68,10 +73,15 @@ def normalize_config(config):
     model = str(config.get("model") or DEFAULT_MODEL).strip()
     if not model:
         raise ValueError("Model must not be empty.")
-    max_tokens = int(config.get("max_tokens") or 4096)
+    max_tokens = int(config.get("max_tokens") or MIN_MAX_TOKENS)
+    context_window = int(config.get("context_window") or DEFAULT_CONTEXT_WINDOW)
     timeout = int(config.get("timeout") or 180)
-    if max_tokens < 1 or timeout < 1:
-        raise ValueError("Token budget and timeout must be positive.")
+    if max_tokens < MIN_MAX_TOKENS:
+        max_tokens = MIN_MAX_TOKENS
+    if context_window < 1:
+        raise ValueError("Context window must be positive.")
+    if timeout < 1:
+        raise ValueError("Timeout must be positive.")
     workers = config.get("workers")
     if not isinstance(workers, list) or not workers:
         raise ValueError("At least one worker is required.")
@@ -91,9 +101,12 @@ def normalize_config(config):
             raise ValueError("Worker slots must be between 0 and 8.")
         worker_model = str(worker.get("model") or "").strip()
         worker_max_tokens = int(worker.get("max_tokens") or 0)
+        worker_context_window = int(worker.get("context_window") or 0)
         worker_timeout = int(worker.get("timeout") or 0)
-        if worker_max_tokens < 0 or worker_timeout < 0:
-            raise ValueError("Per-worker token budget and timeout must not be negative.")
+        if worker_max_tokens < 0 or worker_context_window < 0 or worker_timeout < 0:
+            raise ValueError("Per-worker token budget, context window, and timeout must not be negative.")
+        if worker_max_tokens and worker_max_tokens < MIN_MAX_TOKENS:
+            worker_max_tokens = MIN_MAX_TOKENS
         normalized.append(
             {
                 "id": worker_id,
@@ -102,13 +115,20 @@ def normalize_config(config):
                 "slots": slots,
                 "model": worker_model,
                 "max_tokens": worker_max_tokens,
+                "context_window": worker_context_window,
                 "timeout": worker_timeout,
                 "enabled": bool(worker.get("enabled")) and slots > 0,
             }
         )
     if not any(worker["enabled"] for worker in normalized):
         raise ValueError("At least one worker must be enabled with slots > 0.")
-    return {"model": model, "max_tokens": max_tokens, "timeout": timeout, "workers": normalized}
+    return {
+        "model": model,
+        "max_tokens": max_tokens,
+        "context_window": context_window,
+        "timeout": timeout,
+        "workers": normalized,
+    }
 
 
 def config_path(home):
@@ -119,7 +139,14 @@ def load_config(home):
     path = config_path(home)
     if not path.exists():
         return default_config()
-    return normalize_config(json.loads(path.read_text(encoding="utf-8-sig")))
+    try:
+        return normalize_config(json.loads(path.read_text(encoding="utf-8-sig")))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        backup = path.with_suffix(path.suffix + ".bad")
+        if backup.exists():
+            backup.unlink()
+        path.replace(backup)
+        return default_config()
 
 
 def save_config(home, config):
@@ -127,6 +154,9 @@ def save_config(home, config):
     path = config_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
+    backup = path.with_suffix(path.suffix + ".bak")
+    if path.exists():
+        backup.write_text(path.read_text(encoding="utf-8-sig"), encoding="utf-8")
     tmp.write_text(json.dumps(normalized, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, path)
     return normalized
