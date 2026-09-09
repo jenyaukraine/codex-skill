@@ -140,3 +140,10 @@ class Queue:
                 (note, worker),
             ).rowcount
             return updated > 0
+
+    def update_worker_note(self, worker, note):
+        with closing(self.connect()) as db, db:
+            db.execute(
+                'UPDATE workers SET note=? WHERE id=? AND blocked=1',
+                (note, worker),
+            )

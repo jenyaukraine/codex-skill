@@ -21,6 +21,7 @@ from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, MIN_MAX_T
 DEFAULT_HOME = Path(__file__).resolve().parents[3] / 'bionic-dispatcher'
 AUTO_RESUME_INTERVAL_SECONDS = 20
 AUTO_RESUME_HEALTH_TIMEOUT_SECONDS = 5
+AUTO_RESUME_REQUIRED_STABLE_PROBES = 3
 
 
 def validate_tasks(tasks, worker_ids=None):
@@ -144,6 +145,7 @@ def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qw
     output_lock = threading.Lock()
     probe_lock = threading.Lock()
     last_probe = {}
+    healthy_probe_streak = {}
 
     def maybe_auto_resume(worker):
         if not watch:
@@ -155,7 +157,7 @@ def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qw
                 return
             last_probe[worker_id] = now
         try:
-            resumed = auto_resume_worker(queue, worker, model)
+            resumed = auto_resume_worker(queue, worker, model, healthy_probe_streak)
         except Exception as exc:
             with output_lock:
                 emit({'event': 'auto_resume_probe_failed', 'worker': worker_id, 'error': str(exc)[:1000]})
@@ -337,16 +339,30 @@ def worker_warmup(workers, model, context_window, ttl, timeout=60):
     return results
 
 
-def auto_resume_worker(queue, worker, default_model, timeout=AUTO_RESUME_HEALTH_TIMEOUT_SECONDS):
+def auto_resume_worker(queue, worker, default_model, healthy_probe_streak=None, timeout=AUTO_RESUME_HEALTH_TIMEOUT_SECONDS, required_stable_probes=AUTO_RESUME_REQUIRED_STABLE_PROBES):
     if not queue.worker_blocked(worker['id']):
+        if healthy_probe_streak is not None:
+            healthy_probe_streak.pop(worker['id'], None)
         return False
     result = worker_health([worker], timeout=timeout)[0]
     required_model = worker.get('model') or default_model
     if not result.get('ok') or required_model not in result.get('models', []):
+        if healthy_probe_streak is not None:
+            healthy_probe_streak[worker['id']] = 0
+        reason = result.get('error') or f"model {required_model} not visible"
+        queue.update_worker_note(worker['id'], f"Waiting for stable /models before auto-resume: {reason[:800]}")
         return False
+    if healthy_probe_streak is not None:
+        healthy_probe_streak[worker['id']] = healthy_probe_streak.get(worker['id'], 0) + 1
+        if healthy_probe_streak[worker['id']] < required_stable_probes:
+            queue.update_worker_note(
+                worker['id'],
+                f"Waiting for stable /models before auto-resume: {healthy_probe_streak[worker['id']]}/{required_stable_probes} ok probes for {required_model}",
+            )
+            return False
     return queue.unblock_if_idle(
         worker['id'],
-        f"Auto-resumed: /models ok and {required_model} available",
+        f"Auto-resumed: /models stable and {required_model} available",
     )
 
 

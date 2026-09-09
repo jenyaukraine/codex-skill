@@ -75,7 +75,7 @@ class DispatcherTests(unittest.TestCase):
         self.assertIsNone(self.q.claim('21'))
         self.assertEqual(self.q.claim('33')['id'], '1')
 
-    def test_auto_resume_unblocks_idle_worker_when_model_is_available(self):
+    def test_auto_resume_waits_for_stable_model_visibility_before_unblock(self):
         self.q.add([{'id': str(i), 'prompt': 'x'} for i in range(2)])
         job = self.q.claim('21')
         self.q.finish(
@@ -94,12 +94,16 @@ class DispatcherTests(unittest.TestCase):
             'model': 'qwen3.8-9b-distill@q4_k_m',
         }
         missing = subprocess.CompletedProcess([], 0, json.dumps({'models': ['other-model']}), '')
+        streak = {}
         with patch('dispatcher.subprocess.run', return_value=missing):
-            self.assertFalse(auto_resume_worker(self.q, worker, 'qwen3.8-9b-distill', timeout=1))
+            self.assertFalse(auto_resume_worker(self.q, worker, 'qwen3.8-9b-distill', streak, timeout=1))
         self.assertTrue(self.q.worker_blocked('21'))
+        self.assertIn('Waiting for stable /models', self.q.workers()[0]['note'])
         present = subprocess.CompletedProcess([], 0, json.dumps({'models': ['qwen3.8-9b-distill@q4_k_m']}), '')
         with patch('dispatcher.subprocess.run', return_value=present):
-            self.assertTrue(auto_resume_worker(self.q, worker, 'qwen3.8-9b-distill', timeout=1))
+            self.assertFalse(auto_resume_worker(self.q, worker, 'qwen3.8-9b-distill', streak, timeout=1))
+            self.assertFalse(auto_resume_worker(self.q, worker, 'qwen3.8-9b-distill', streak, timeout=1))
+            self.assertTrue(auto_resume_worker(self.q, worker, 'qwen3.8-9b-distill', streak, timeout=1))
         self.assertFalse(self.q.worker_blocked('21'))
         self.assertEqual(self.q.claim('21')['id'], '1')
 

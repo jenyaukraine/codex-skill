@@ -13,7 +13,7 @@ python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" config
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" config-ui
 ```
 
-`add` atomically enqueues the manifest and automatically starts one hidden persistent runner, or reuses the active one. No second launch command is required. The runner waits for new work when idle and fills any available slot (three per host). It sends requests to already running LM Studio; it does not launch LM Studio or Codex.
+`add` atomically enqueues the manifest and automatically starts one hidden persistent runner, or reuses the active one. No second launch command is required. The runner waits for new work when idle and fills any available slot (three per host). It sends requests to already running, healthy LM Studio APIs; it does not launch LM Studio, load models on purpose, or start Codex.
 
 Manifest (UTF-8 JSON):
 
@@ -51,7 +51,7 @@ Default persistent data: `C:/Users/jenya/.codex/bionic-dispatcher/queue.sqlite3`
 
 `result ID` returns full model output without printing its submitted prompt. Model code never runs automatically. Codex must review, integrate and run checks. Generation is not a test run.
 
-In persistent `--watch` mode, blocked enabled workers are probed periodically with `/models`. If the configured model is available again and the worker has no running job in the queue, the dispatcher automatically clears the block and the worker resumes claiming FIFO work. The failed job remains `uncertain`; it is not retried under the same id.
+In persistent `--watch` mode, blocked enabled workers are probed periodically with `/models`. If the configured model is visible for several stable probes and the worker has no running job in the queue, the dispatcher automatically clears the block and the worker resumes claiming FIFO work. A single successful probe is intentionally not enough because LM Studio may still be launching or loading a model. The failed job remains `uncertain`; it is not retried under the same id.
 
 ## Recovery / maintenance only
 
