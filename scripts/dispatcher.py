@@ -99,6 +99,22 @@ def execute_job(job, worker, directory, model, max_tokens, timeout, reasoning, b
         prompt_path.unlink(missing_ok=True)
 
 
+def should_block_worker(status, result):
+    if status != 'uncertain':
+        return False
+    text = json.dumps(result or {}, ensure_ascii=False).lower()
+    unavailable_markers = (
+        'actively refused',
+        'connection refused',
+        'no connection could be made',
+        'failed to establish a new connection',
+        'max retries exceeded',
+        'local api or input file unavailable',
+        'target machine actively refused',
+    )
+    return any(marker in text for marker in unavailable_markers)
+
+
 def emit(value):
     print(json.dumps(value, ensure_ascii=False), flush=True)
 
@@ -149,7 +165,7 @@ def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qw
                 )
             except Exception as exc:
                 status, result = 'uncertain', {'error': str(exc)[:1000]}
-            queue.finish(job['id'], status, result, block_worker=False)
+            queue.finish(job['id'], status, result, block_worker=should_block_worker(status, result))
             with output_lock:
                 emit({'event': status, 'id': job['id'], 'worker': worker_id})
     max_workers = sum(worker['slots'] for worker in workers)

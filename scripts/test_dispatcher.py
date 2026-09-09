@@ -9,7 +9,7 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
-from dispatcher import Queue, drain, execute_job, render_config_page, runner_lock, status_summary, validate_tasks, worker_health, worker_warmup
+from dispatcher import Queue, drain, execute_job, render_config_page, runner_lock, should_block_worker, status_summary, validate_tasks, worker_health, worker_warmup
 from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, normalize_config, save_config
 
 
@@ -56,6 +56,23 @@ class DispatcherTests(unittest.TestCase):
         self.q.finish('0', 'uncertain', {'error': 'client timeout'}, block_worker=False)
         self.assertEqual(self.q.claim('21')['id'], '1')
         self.assertFalse(self.q.workers()[0]['blocked'])
+
+    def test_unavailable_api_uncertain_blocks_that_worker(self):
+        self.assertFalse(should_block_worker('uncertain', {'error': 'client timeout'}))
+        self.assertTrue(should_block_worker(
+            'uncertain',
+            {'error': 'Local API or input file unavailable: target machine actively refused it'},
+        ))
+        self.q.add([{'id': str(i), 'prompt': 'x'} for i in range(3)])
+        job = self.q.claim('21')
+        self.q.finish(
+            job['id'],
+            'uncertain',
+            {'error': 'No connection could be made because the target machine actively refused it'},
+            block_worker=True,
+        )
+        self.assertIsNone(self.q.claim('21'))
+        self.assertEqual(self.q.claim('33')['id'], '1')
 
     def test_single_runner_and_exception_release(self):
         lock = self.root / 'runner.lock'
