@@ -11,6 +11,8 @@ Use `scripts/dispatcher.py add --file <absolute-manifest.json>` for **all genera
 
 Read [dispatcher usage](references/dispatcher.md) before first use. The paths are relative to this skill. The dispatcher is installed outside projects and works from any working directory.
 
+When the user asks to save frontier-model tokens, let local workers cover more routine work, or run "local-worker-first", also read [frontier token saving mode](references/token-saving.md).
+
 ## Current user preferences (2026-09-09)
 
 - Hosts: `21` = `http://192.168.88.21:1234/v1`; `5` = `http://192.168.88.5:1234/v1`. Localhost is the same physical machine as 21, never a third worker.
@@ -23,6 +25,8 @@ User preference: proactively delegate useful independent parts of the current au
 
 Aggressive utilization preference: keep the shared queue warm whenever there is any useful independent work, even a micro-opportunity. If a task can be split into reviewable text-only units such as edge-case audit, route check, CSS critique, SQL query review, test-case draft, migration risk, copy pass, acceptance checklist, or implementation sketch, enqueue it instead of leaving workers idle. Prefer small bounded tasks with concrete acceptance criteria over waiting for a large perfect batch. Top up the queue opportunistically while Codex continues integration work, unless enough `done` results are already awaiting review that acceptance work is clearly the bottleneck.
 
+Frontier token saving preference: when the user wants lower frontier-token use, operate in local-worker-first mode. Codex keeps repo reading, edits, tests, browser verification, and final decisions, while workers draft audits, specs, test cases, risk registers, implementation sketches, and acceptance checklists. Keep prompts short and module-scoped so local models finish reliably.
+
 ## Responsibilities and boundaries
 
 Workers receive text only. They cannot read files, run tests, edit the project, start processes, or use tools. Give each one a bounded execution assignment with relevant source, exact interfaces, edge cases and expected output. Codex owns planning, integration, browser verification and test execution. Model response `done` is not acceptance or evidence of passed tests.
@@ -33,6 +37,6 @@ The two LAN hosts are user-authorized for task context, not unrelated personal d
 
 An uncertain response or timeout pauses that host because generation may still be running. Never automatically retry or unblock. Only release it after the operator confirms the upstream generation stopped. Completed/incomplete responses release their slots automatically. An empty queue is idle, not a scheduler error: state this accurately and do not claim GPU activity from local queue state alone.
 
-Useful diagnostics: dispatcher `status`, `result <id>`, and client `--worker 21 --models` / `--worker 5 --models`. See the reference for recovery and isolated tests. No direct generation commands should appear in handoffs.
+Useful diagnostics: dispatcher `summary`, `health`, `status`, `result <id>`, and client `--worker 21 --models` / `--worker 5 --models`. Prefer `summary --prefix <task-prefix>` when the queue is large. Use `health` for `/models` latency and availability checks without sending generation prompts. See the reference for recovery and isolated tests. No direct generation commands should appear in handoffs.
 
-Configuration: use `python "<skill>/scripts/dispatcher.py" config` for JSON config, or `python "<skill>/scripts/dispatcher.py" config-ui` to open the local configuration page. The UI supports default worker URLs, adding machines, enabling/disabling workers, and per-worker slots. For a flaky host such as `5`, lower its slots or raise timeout in config instead of bypassing the dispatcher.
+Configuration: use `python "<skill>/scripts/dispatcher.py" config` for JSON config, or `python "<skill>/scripts/dispatcher.py" config-ui` to open the local configuration page. The UI supports default worker URLs, adding machines, enabling/disabling workers, per-worker slots, and per-worker model/token/timeout overrides. For a flaky host such as `5`, lower its slots or raise timeout in config instead of bypassing the dispatcher.

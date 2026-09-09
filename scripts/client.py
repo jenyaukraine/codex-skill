@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 import sys
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from worker_config import DEFAULT_WORKERS, private_http_v1
 
@@ -21,8 +20,7 @@ def local_base(value):
     try:
         return private_http_v1(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("Use worker 21 or 5 on HTTP port 1234 with /v1, or a loopback HTTP URL ending in /v1.")
-    return value.rstrip("/")
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def positive(value):

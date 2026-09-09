@@ -11,6 +11,7 @@ Codex skill for using two local LM Studio/Bionic workers through one durable sha
 - Automatically starts or reuses the persistent dispatcher runner.
 - Preserves uncertain results and blocks a host until the operator confirms the upstream generation stopped.
 - Keeps Codex responsible for reviewing, integrating, testing, and accepting generated output.
+- Supports a local-worker-first workflow so small audits, specs, test drafts, and checklists use local machines before frontier-model tokens.
 
 ## Current Worker Map
 
@@ -39,10 +40,24 @@ Add it to the queue:
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" add --file "C:/absolute/path/tasks.json"
 ```
 
+For project work, prefer many short module-scoped tasks over one huge prompt. Codex should integrate and verify; workers should draft reviewable text artifacts.
+
 Check status:
 
 ```powershell
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" status
+```
+
+Compact status for day-to-day use:
+
+```powershell
+python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" summary --prefix bionic-skill-polish-
+```
+
+Check worker health without sending a generation prompt:
+
+```powershell
+python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" health
 ```
 
 Show JSON configuration:
@@ -63,7 +78,10 @@ The configuration page supports:
 - changing base URLs,
 - enabling or disabling a worker,
 - setting slots per worker,
-- changing default model, timeout, and token budget.
+- changing default model, timeout, and token budget,
+- overriding model, timeout, and token budget per worker.
+
+If the default port is busy, `config-ui` automatically falls back to a free local port and prints the URL.
 
 Read a result:
 

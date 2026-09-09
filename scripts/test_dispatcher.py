@@ -9,7 +9,7 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
-from dispatcher import Queue, drain, execute_job, runner_lock, validate_tasks
+from dispatcher import Queue, drain, execute_job, runner_lock, status_summary, validate_tasks, worker_health
 from worker_config import default_config, enabled_workers, load_config, normalize_config, save_config
 
 
@@ -144,11 +144,14 @@ os._exit(1)
             'timeout': 240,
             'workers': [
                 {'id': '21', 'name': 'Main', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 2, 'enabled': True},
-                {'id': 'lab', 'name': 'Lab', 'base_url': 'http://10.0.0.12:9999/v1', 'slots': 1, 'enabled': True},
+                {'id': 'lab', 'name': 'Lab', 'base_url': 'http://10.0.0.12:9999/v1', 'slots': 1, 'model': 'lab-model', 'max_tokens': 1024, 'timeout': 300, 'enabled': True},
                 {'id': 'off', 'name': 'Off', 'base_url': 'http://127.0.0.1:1234/v1', 'slots': 0, 'enabled': True},
             ],
         })
         self.assertEqual(saved['model'], 'local-model')
+        self.assertEqual(saved['workers'][1]['model'], 'lab-model')
+        self.assertEqual(saved['workers'][1]['max_tokens'], 1024)
+        self.assertEqual(saved['workers'][1]['timeout'], 300)
         self.assertEqual([worker['id'] for worker in enabled_workers(saved)], ['21', 'lab'])
         self.q.sync_workers(saved['workers'])
         self.assertIn('lab', [row['id'] for row in self.q.workers()])
@@ -174,6 +177,38 @@ os._exit(1)
         self.assertEqual(len(seen), 5)
         self.assertIn('21', seen)
         self.assertIn('5', seen)
+
+    def test_per_worker_overrides_and_summary(self):
+        self.q.add([{'id': 'pref-1', 'prompt': 'x'}, {'id': 'pref-2', 'prompt': 'x'}])
+        calls = []
+        def fake(job, worker, directory, model, max_tokens, timeout, reasoning, base_url):
+            calls.append((worker, model, max_tokens, timeout, base_url))
+            time.sleep(.02)
+            return 'done', {'content': 'ok'}
+        workers = [
+            {'id': '21', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 1, 'model': 'fast', 'max_tokens': 512, 'timeout': 60},
+            {'id': '5', 'base_url': 'http://192.168.88.5:1234/v1', 'slots': 1, 'model': '', 'max_tokens': 0, 'timeout': 0},
+        ]
+        self.q.sync_workers(workers)
+        with contextlib.redirect_stdout(io.StringIO()):
+            drain(self.q, self.root, execute=fake, workers=workers, model='default', max_tokens=4096, timeout=180)
+        self.assertIn(('21', 'fast', 512, 60, 'http://192.168.88.21:1234/v1'), calls)
+        self.assertIn(('5', 'default', 4096, 180, 'http://192.168.88.5:1234/v1'), calls)
+        summary = status_summary(self.q, prefix='pref-', limit=1)
+        self.assertEqual(summary['counts'], {'done': 2})
+        self.assertEqual(summary['prefix'], 'pref-')
+
+    def test_worker_health_parses_models(self):
+        completed = subprocess.CompletedProcess([], 0, json.dumps({'models': ['m1', 'm2']}), '')
+        workers = [{'id': '21', 'name': 'Main', 'base_url': 'http://192.168.88.21:1234/v1', 'slots': 3, 'enabled': True}]
+        with patch('dispatcher.subprocess.run', return_value=completed):
+            result = worker_health(workers, timeout=1)
+        self.assertTrue(result[0]['ok'])
+        self.assertEqual(result[0]['models'], ['m1', 'm2'])
+        with patch('dispatcher.subprocess.run', side_effect=subprocess.TimeoutExpired('client', 1)):
+            result = worker_health(workers, timeout=1)
+        self.assertFalse(result[0]['ok'])
+        self.assertEqual(result[0]['models'], [])
 
 
 if __name__ == '__main__':

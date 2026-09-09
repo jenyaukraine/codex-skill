@@ -136,7 +136,13 @@ def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qw
             with output_lock:
                 emit({'event': 'started', 'id': job['id'], 'worker': worker_id})
             try:
-                status, result = execute(job, worker_id, directory, model, max_tokens, timeout, reasoning, worker.get('base_url'))
+                worker_model = worker.get('model') or model
+                worker_max_tokens = worker.get('max_tokens') or max_tokens
+                worker_timeout = worker.get('timeout') or timeout
+                status, result = execute(
+                    job, worker_id, directory, worker_model, worker_max_tokens,
+                    worker_timeout, reasoning, worker.get('base_url')
+                )
             except Exception as exc:
                 status, result = 'uncertain', {'error': str(exc)[:1000]}
             queue.finish(job['id'], status, result)
@@ -154,6 +160,79 @@ def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qw
     return 0 if all(j['status'] == 'done' for j in queue.status()) else 2
 
 
+def status_summary(queue, prefix='', limit=12):
+    workers = queue.workers()
+    jobs = queue.status()
+    if prefix:
+        jobs = [job for job in jobs if job['id'].startswith(prefix)]
+    counts = {}
+    for job in jobs:
+        counts[job['status']] = counts.get(job['status'], 0) + 1
+    return {
+        'workers': workers,
+        'counts': counts,
+        'running': [job for job in jobs if job['status'] == 'running'][:limit],
+        'queued_head': [job for job in jobs if job['status'] == 'queued'][:limit],
+        'blocked_workers': [worker for worker in workers if worker['blocked']],
+        'prefix': prefix,
+    }
+
+
+def worker_health(workers, timeout=10):
+    results = []
+    for worker in workers:
+        started = time.monotonic()
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name('client.py')),
+            '--base-url',
+            worker['base_url'],
+            '--models',
+            '--timeout',
+            str(timeout),
+        ]
+        latency_ms = round((time.monotonic() - started) * 1000)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                timeout=timeout + 5,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            results.append({
+                'id': worker['id'],
+                'name': worker['name'],
+                'base_url': worker['base_url'],
+                'enabled': worker['enabled'],
+                'slots': worker['slots'],
+                'ok': False,
+                'latency_ms': latency_ms,
+                'models': [],
+                'error': str(exc)[:1000],
+            })
+            continue
+        latency_ms = round((time.monotonic() - started) * 1000)
+        try:
+            payload = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            payload = {}
+        results.append({
+            'id': worker['id'],
+            'name': worker['name'],
+            'base_url': worker['base_url'],
+            'enabled': worker['enabled'],
+            'slots': worker['slots'],
+            'ok': result.returncode == 0,
+            'latency_ms': latency_ms,
+            'models': payload.get('models', []),
+            'error': '' if result.returncode == 0 else (result.stderr.strip() or result.stdout.strip())[:1000],
+        })
+    return results
+
+
 def render_config_page(config, message=''):
     worker_rows = []
     for index, worker in enumerate(config['workers']):
@@ -164,6 +243,9 @@ def render_config_page(config, message=''):
           <td><input name="name_{index}" value="{escape(worker['name'])}" required></td>
           <td><input name="base_url_{index}" value="{escape(worker['base_url'])}" required></td>
           <td><input type="number" min="0" max="8" name="slots_{index}" value="{worker['slots']}" required></td>
+          <td><input name="model_{index}" value="{escape(worker.get('model', ''))}" placeholder="default"></td>
+          <td><input type="number" min="0" name="max_tokens_{index}" value="{worker.get('max_tokens', 0)}"></td>
+          <td><input type="number" min="0" name="timeout_{index}" value="{worker.get('timeout', 0)}"></td>
           <td><input type="checkbox" name="enabled_{index}" {checked}></td>
         </tr>""")
     return f"""<!doctype html>
@@ -200,9 +282,9 @@ button,.button {{ border:0; border-radius:8px; background:var(--green); color:wh
     <div><label>Timeout seconds</label><input type="number" min="1" name="timeout" value="{config['timeout']}" required></div>
   </div>
   <table>
-    <thead><tr><th>ID</th><th>Name</th><th>Base URL</th><th>Slots</th><th>Enabled</th></tr></thead>
+    <thead><tr><th>ID</th><th>Name</th><th>Base URL</th><th>Slots</th><th>Model</th><th>Tokens</th><th>Timeout</th><th>Enabled</th></tr></thead>
     <tbody>{''.join(worker_rows)}
-      <tr><td><input name="id_new" placeholder="new-id"></td><td><input name="name_new" placeholder="New worker"></td><td><input name="base_url_new" placeholder="http://192.168.88.50:1234/v1"></td><td><input type="number" min="0" max="8" name="slots_new" value="1"></td><td><input type="checkbox" name="enabled_new"></td></tr>
+      <tr><td><input name="id_new" placeholder="new-id"></td><td><input name="name_new" placeholder="New worker"></td><td><input name="base_url_new" placeholder="http://192.168.88.50:1234/v1"></td><td><input type="number" min="0" max="8" name="slots_new" value="1"></td><td><input name="model_new" placeholder="default"></td><td><input type="number" min="0" name="max_tokens_new" value="0"></td><td><input type="number" min="0" name="timeout_new" value="0"></td><td><input type="checkbox" name="enabled_new"></td></tr>
     </tbody>
   </table>
   <div class="actions"><button>Save configuration</button><a class="button secondary" href="/">Reload</a></div>
@@ -223,6 +305,9 @@ def form_to_config(form):
             'name': form.get('name_' + index, [worker_id])[0].strip() or worker_id,
             'base_url': base_url,
             'slots': int(form.get('slots_' + index, ['0'])[0] or 0),
+            'model': form.get('model_' + index, [''])[0],
+            'max_tokens': int(form.get('max_tokens_' + index, ['0'])[0] or 0),
+            'timeout': int(form.get('timeout_' + index, ['0'])[0] or 0),
             'enabled': ('enabled_' + index) in form,
         })
     return {
@@ -233,7 +318,7 @@ def form_to_config(form):
     }
 
 
-def serve_config_ui(home, host, port):
+def serve_config_ui(home, host, port, open_browser=True):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             return
@@ -260,10 +345,14 @@ def serve_config_ui(home, host, port):
                 message = 'Not saved: ' + str(exc)
             self._send(200, render_config_page(config, message))
 
-    server = ThreadingHTTPServer((host, port), Handler)
+    try:
+        server = ThreadingHTTPServer((host, port), Handler)
+    except OSError:
+        server = ThreadingHTTPServer((host, 0), Handler)
     url = f'http://{host}:{server.server_port}/'
     print(json.dumps({'config_ui': url}, ensure_ascii=False), flush=True)
-    webbrowser.open(url)
+    if open_browser:
+        webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -286,10 +375,16 @@ def main():
     run.add_argument('--timeout', type=int)
     run.add_argument('--reasoning', choices=('openai', 'off', 'on'), default='openai')
     commands.add_parser('status')
+    summary = commands.add_parser('summary')
+    summary.add_argument('--prefix', default='')
+    summary.add_argument('--limit', type=int, default=12)
+    health = commands.add_parser('health')
+    health.add_argument('--timeout', type=int, default=10)
     commands.add_parser('config')
     config_ui = commands.add_parser('config-ui')
     config_ui.add_argument('--host', default='127.0.0.1')
     config_ui.add_argument('--port', type=int, default=8795)
+    config_ui.add_argument('--no-open', action='store_true')
     result = commands.add_parser('result'); result.add_argument('id')
     unblock = commands.add_parser('unblock'); unblock.add_argument('worker'); unblock.add_argument('--note', required=True)
     args = parser.parse_args()
@@ -304,10 +399,14 @@ def main():
             emit({'runner': ensure_runner(args.home)})
     elif args.command == 'status':
         emit({'workers': queue.workers(), 'jobs': queue.status()})
+    elif args.command == 'summary':
+        emit(status_summary(queue, args.prefix, args.limit))
+    elif args.command == 'health':
+        emit({'workers': worker_health(config['workers'], args.timeout)})
     elif args.command == 'config':
         emit(config)
     elif args.command == 'config-ui':
-        return serve_config_ui(args.home, args.host, args.port)
+        return serve_config_ui(args.home, args.host, args.port, not args.no_open)
     elif args.command == 'result':
         item = queue.result(args.id)
         if item is None:

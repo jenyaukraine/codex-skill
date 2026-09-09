@@ -5,6 +5,8 @@ From any working directory:
 ```powershell
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" add --file "C:/absolute/path/tasks.json"
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" status
+python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" summary --prefix project-20260909-
+python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" health
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" result project-20260909-example
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" config
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" config-ui
@@ -32,7 +34,7 @@ Defaults:
 - `21`: `http://192.168.88.21:1234/v1`, `slots: 3`
 - `5`: `http://192.168.88.5:1234/v1`, `slots: 3`
 
-Open the local configuration page with `config-ui`. It allows adding local/LAN machines, editing base URLs, enabling/disabling workers, and setting slots per worker. Set slots to `0` or disable a worker to keep it out of dispatch. Existing watch runners should be restarted to apply changed slot counts.
+Open the local configuration page with `config-ui`. It allows adding local/LAN machines, editing base URLs, enabling/disabling workers, setting slots per worker, and overriding model, timeout, and max tokens per worker. Set slots to `0` or disable a worker to keep it out of dispatch. Existing watch runners should be restarted to apply changed slot counts. If the requested UI port is busy, `config-ui` binds a free local fallback port and prints it.
 
 ## State and interpretation
 
@@ -60,4 +62,4 @@ Never kill a worker or silently repeat timed-out work. If the runner process exi
 
 `client.py` is an internal text transport. For read-only model discovery only: `python <skill>/scripts/client.py --worker 21 --models`. Do not send generation through it, raw HTTP, project helper scripts, or multiple queue processes.
 
-Default model: qwen3.8-9b-distill; OpenAI-compatible chat transport; token limit 4096; timeout 180 seconds. Do not use qwen3.8-9b-coder for this queue; it returns LM Studio server errors. Pass `run --reasoning off` only for models verified with LM Studio's native chat endpoint. Live defaults are centralized in `config.json`, falling back to `worker_config.py` defaults. Tests: `python -m unittest test_dispatcher -v` from the skill scripts directory.
+Default model: qwen3.8-9b-distill; OpenAI-compatible chat transport; token limit 4096; timeout 180 seconds. Do not use qwen3.8-9b-coder for this queue; it returns LM Studio server errors. Pass `run --reasoning off` only for models verified with LM Studio's native chat endpoint. Live defaults are centralized in `config.json`, falling back to `worker_config.py` defaults. Prefer `summary` over full `status` when the queue is large. Tests: `python -m unittest test_dispatcher -v` from the skill scripts directory.

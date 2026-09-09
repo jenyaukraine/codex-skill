@@ -1,6 +1,7 @@
 """Persistent worker configuration for bionic-local."""
 import ipaddress
 import json
+import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -11,6 +12,9 @@ DEFAULT_WORKERS = [
         "name": "Bionic 21",
         "base_url": "http://192.168.88.21:1234/v1",
         "slots": 3,
+        "model": "",
+        "max_tokens": 0,
+        "timeout": 0,
         "enabled": True,
     },
     {
@@ -18,6 +22,9 @@ DEFAULT_WORKERS = [
         "name": "Bionic 5",
         "base_url": "http://192.168.88.5:1234/v1",
         "slots": 3,
+        "model": "",
+        "max_tokens": 0,
+        "timeout": 0,
         "enabled": True,
     },
 ]
@@ -82,12 +89,20 @@ def normalize_config(config):
         slots = int(worker.get("slots") or 0)
         if slots < 0 or slots > 8:
             raise ValueError("Worker slots must be between 0 and 8.")
+        worker_model = str(worker.get("model") or "").strip()
+        worker_max_tokens = int(worker.get("max_tokens") or 0)
+        worker_timeout = int(worker.get("timeout") or 0)
+        if worker_max_tokens < 0 or worker_timeout < 0:
+            raise ValueError("Per-worker token budget and timeout must not be negative.")
         normalized.append(
             {
                 "id": worker_id,
                 "name": str(worker.get("name") or worker_id).strip(),
                 "base_url": private_http_v1(str(worker.get("base_url") or "").strip()),
                 "slots": slots,
+                "model": worker_model,
+                "max_tokens": worker_max_tokens,
+                "timeout": worker_timeout,
                 "enabled": bool(worker.get("enabled")) and slots > 0,
             }
         )
@@ -111,7 +126,9 @@ def save_config(home, config):
     normalized = normalize_config(config)
     path = config_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(normalized, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(normalized, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
     return normalized
 
 
