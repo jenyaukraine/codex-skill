@@ -12,6 +12,9 @@ class Queue:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self.connect()) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, prompt TEXT NOT NULL, worker TEXT, status TEXT NOT NULL, result TEXT, created REAL)')
+            db.execute('CREATE TABLE IF NOT EXISTS archived_jobs (id TEXT PRIMARY KEY, prompt TEXT NOT NULL, worker TEXT, status TEXT NOT NULL, result TEXT, created REAL, archived_at REAL NOT NULL, acceptance_status TEXT NOT NULL, acceptance_reason TEXT NOT NULL)')
+            # A database guard also reserves IDs for older clients still running.
+            db.execute("CREATE TRIGGER IF NOT EXISTS reserve_archived_job_ids BEFORE INSERT ON jobs WHEN EXISTS (SELECT 1 FROM archived_jobs WHERE id=NEW.id) BEGIN SELECT RAISE(ABORT, 'Job ID is reserved in archive'); END")
             db.execute('CREATE TABLE IF NOT EXISTS workers (id TEXT PRIMARY KEY, blocked INTEGER NOT NULL DEFAULT 0, note TEXT)')
             db.executemany('INSERT OR IGNORE INTO workers(id) VALUES(?)', [('21',), ('33',)])
 
@@ -38,6 +41,41 @@ class Queue:
                 "(SELECT worker FROM jobs WHERE status='running' AND worker IS NOT NULL)",
                 ids,
             )
+
+    def archive(self, entries):
+        """Atomically remove explicitly reviewed terminal jobs from the active queue."""
+        if not isinstance(entries, list) or not entries:
+            raise ValueError('Expected a nonempty acceptance manifest')
+        seen = set()
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) != {'id', 'status', 'reason'}:
+                raise ValueError('Archive entries require exactly id, status and reason')
+            if any(not isinstance(entry[k], str) or not entry[k].strip() for k in entry):
+                raise ValueError('Archive id, status and reason must be nonempty strings')
+            if entry['status'] not in ('accepted', 'rejected', 'duplicate', 'stale'):
+                raise ValueError('Archive status must be accepted, rejected, duplicate or stale')
+            if entry['id'] in seen:
+                raise ValueError('Duplicate archive ID: ' + entry['id'])
+            seen.add(entry['id'])
+        with closing(self.connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            rows = []
+            for entry in entries:
+                row = db.execute('SELECT * FROM jobs WHERE id=?', (entry['id'],)).fetchone()
+                if row is None:
+                    raise ValueError('Unknown or already archived job: ' + entry['id'])
+                if row['status'] not in ('done', 'incomplete', 'uncertain'):
+                    raise ValueError('Cannot archive nonterminal job: ' + entry['id'])
+                rows.append((row, entry))
+            archived_at = time.time()
+            for row, entry in rows:
+                db.execute(
+                    'INSERT INTO archived_jobs (id,prompt,worker,status,result,created,archived_at,acceptance_status,acceptance_reason) VALUES (?,?,?,?,?,?,?,?,?)',
+                    (row['id'], row['prompt'], row['worker'], row['status'], row['result'],
+                     row['created'], archived_at, entry['status'], entry['reason']),
+                )
+                db.execute('DELETE FROM jobs WHERE id=?', (row['id'],))
+        return {'archived': len(entries), 'ids': [entry['id'] for entry in entries]}
 
     def claim(self, worker):
         with closing(self.connect()) as db, db:
@@ -111,6 +149,8 @@ class Queue:
     def result(self, job_id):
         with closing(self.connect()) as db:
             row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+            if row is None:
+                row = db.execute('SELECT * FROM archived_jobs WHERE id=?', (job_id,)).fetchone()
             if row is None:
                 return None
             result = dict(row)

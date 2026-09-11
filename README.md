@@ -9,7 +9,8 @@ Codex skill for using two local LM Studio/Bionic workers through one durable sha
 - Uses up to three requests per host, six total.
 - Lets you configure worker URLs, enabled state, and slots per machine.
 - Automatically starts or reuses the persistent dispatcher runner.
-- Preserves uncertain results and blocks a host until the operator confirms the upstream generation stopped.
+- Preserves uncertain results; connection/API failures and interrupted-runner recovery can block a host. Watch mode resumes it after stable model health checks and no running jobs.
+- Archives explicitly reviewed terminal results atomically, preserves their full contents, and keeps their IDs reserved.
 - Keeps Codex responsible for reviewing, integrating, testing, and accepting generated output.
 - Supports a local-worker-first workflow so small audits, specs, test drafts, and checklists use local machines before frontier-model tokens.
 
@@ -100,11 +101,13 @@ Read a result:
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" result project-20260909-example
 ```
 
-Unblock a worker only after the operator confirms the upstream generation has stopped:
+For manual recovery, unblock a worker after the operator confirms the upstream generation has stopped and its API is healthy:
 
 ```powershell
 python "C:/Users/jenya/.codex/skills/bionic-local/scripts/dispatcher.py" unblock 33 --note "Operator confirmed generation stopped"
 ```
+
+To remove reviewed results from the active queue, use `archive --file <acceptance.json>`. See [the archive manifest and review requirements](references/dispatcher.md#archive-reviewed-results). Archived results remain available through `result ID`.
 
 ## Rights
 

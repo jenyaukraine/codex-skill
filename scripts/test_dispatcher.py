@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -38,6 +39,110 @@ class DispatcherTests(unittest.TestCase):
             self.q.add([{'id': 'b', 'prompt': 'y'}, {'id': 'a', 'prompt': 'z'}])
         self.assertEqual([r['id'] for r in self.q.status()], ['a'])
         self.assertEqual(self.q.claim('33')['id'], 'a')
+
+    def test_archive_preserves_full_jobs_and_leaves_other_work_unchanged(self):
+        self.q.add([{'id': 'reviewed', 'prompt': 'source\nтекст'},
+                    {'id': 'other-project-running', 'prompt': 'other'},
+                    {'id': 'other-project-queued', 'prompt': 'queued'}])
+        self.q.claim('21')
+        self.q.finish('reviewed', 'done', {'content': 'patch\nкод', 'extra': [1, None]})
+        self.q.claim('33')
+        original = self.q.result('reviewed')
+        others = [self.q.result(i) for i in ('other-project-running', 'other-project-queued')]
+        workers = self.q.workers()
+        outcome = self.q.archive([{'id': 'reviewed', 'status': 'accepted', 'reason': 'Applied module fix; focused checks passed'}])
+        self.assertEqual(outcome, {'archived': 1, 'ids': ['reviewed']})
+        archived = self.q.result('reviewed')
+        self.assertEqual({key: archived[key] for key in original}, original)
+        self.assertEqual(archived['acceptance_status'], 'accepted')
+        self.assertEqual(archived['acceptance_reason'], 'Applied module fix; focused checks passed')
+        self.assertGreater(archived['archived_at'], 0)
+        self.assertEqual([self.q.result(i) for i in ('other-project-running', 'other-project-queued')], others)
+        self.assertEqual(self.q.workers(), workers)
+        self.assertEqual([row['id'] for row in self.q.status()], ['other-project-running', 'other-project-queued'])
+        self.assertEqual(status_summary(self.q)['counts'], {'running': 1, 'queued': 1})
+        self.assertEqual(self.q.export_results(), [])
+
+    def test_archive_rolls_back_whole_batch_for_running_queued_or_missing_job(self):
+        self.q.add([{'id': i, 'prompt': i} for i in ('done', 'running', 'queued')])
+        self.q.claim('21')
+        self.q.finish('done', 'done', {'content': 'result'})
+        self.q.claim('33')
+        before = [self.q.result(i) for i in ('done', 'running', 'queued')]
+        for invalid in ('running', 'queued', 'missing'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.q.archive([{'id': 'done', 'status': 'accepted', 'reason': 'verified'},
+                                {'id': invalid, 'status': 'rejected', 'reason': 'test'}])
+            self.assertEqual([self.q.result(i) for i in ('done', 'running', 'queued')], before)
+            with closing(self.q.connect()) as db:
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM archived_jobs').fetchone()[0], 0)
+
+    def test_archive_rolls_back_after_a_write_failure(self):
+        self.q.add([{'id': i, 'prompt': i} for i in ('first', 'second')])
+        for job_id in ('first', 'second'):
+            self.q.claim('21')
+            self.q.finish(job_id, 'done', {'content': job_id})
+        before = self.q.status()
+        with closing(self.q.connect()) as db, db:
+            db.execute("CREATE TRIGGER fail_second_archive BEFORE INSERT ON archived_jobs "
+                       "WHEN NEW.id='second' BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.q.archive([{'id': i, 'status': 'accepted', 'reason': 'verified'}
+                            for i in ('first', 'second')])
+        self.assertEqual(self.q.status(), before)
+        for job_id in ('first', 'second'):
+            self.assertEqual(self.q.result(job_id)['result'], {'content': job_id})
+        with closing(self.q.connect()) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM archived_jobs').fetchone()[0], 0)
+
+    def test_archived_id_stays_reserved_and_batch_add_is_atomic(self):
+        self.q.add([{'id': 'old', 'prompt': 'source'}])
+        self.q.claim('21')
+        self.q.finish('old', 'done', {'content': 'result'})
+        self.q.archive([{'id': 'old', 'status': 'duplicate', 'reason': 'Covered by verified change'}])
+        reopened = Queue(self.q.path)
+        with self.assertRaises(sqlite3.IntegrityError):
+            reopened.add([{'id': 'new', 'prompt': 'new'}, {'id': 'old', 'prompt': 'repeat'}])
+        self.assertEqual(reopened.status(), [])
+        self.assertEqual(reopened.result('old')['prompt'], 'source')
+        # Old clients inserting directly are covered by the database trigger too.
+        with self.assertRaises(sqlite3.IntegrityError), closing(reopened.connect()) as db, db:
+            db.execute("INSERT INTO jobs VALUES ('old','retry',NULL,'queued',NULL,0)")
+
+    def test_archive_validation_and_all_terminal_states(self):
+        entry = {'id': 'x', 'status': 'rejected', 'reason': 'unsupported'}
+        invalid = [None, [], [None], [dict(entry, extra=True)], [dict(entry, reason=' ')],
+                   [dict(entry, status='done')], [dict(entry, id=1)], [entry, entry]]
+        for manifest in invalid:
+            with self.subTest(manifest=manifest), self.assertRaises(ValueError):
+                self.q.archive(manifest)
+        self.q.add([{'id': status, 'prompt': status} for status in ('done', 'incomplete', 'uncertain')])
+        entries = []
+        for status in ('done', 'incomplete', 'uncertain'):
+            self.q.claim('21')
+            self.q.finish(status, status, {'content': status}, block_worker=False)
+            entries.append({'id': status, 'status': 'rejected', 'reason': 'Reviewed; no applicable change'})
+        self.q.archive(entries)
+        self.assertEqual(self.q.status(), [])
+        for status in ('done', 'incomplete', 'uncertain'):
+            self.assertEqual(self.q.result(status)['status'], status)
+
+    def test_archive_cli_and_archived_result_lookup_without_runner(self):
+        cli_queue = Queue(self.root / 'queue.sqlite3')
+        cli_queue.add([{'id': 'reviewed', 'prompt': 'private source'}])
+        cli_queue.claim('21')
+        cli_queue.finish('reviewed', 'done', {'content': 'retained result'})
+        manifest = self.root / 'acceptance.json'
+        manifest.write_text(json.dumps([{'id': 'reviewed', 'status': 'stale', 'reason': 'Superseded source'}]), encoding='utf-8')
+        command = [sys.executable, str(Path(__file__).with_name('dispatcher.py')), '--home', str(self.root)]
+        archived = subprocess.run(command + ['archive', '--file', str(manifest)], capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(archived.stdout), {'archived': 1, 'ids': ['reviewed']})
+        found = subprocess.run(command + ['result', 'reviewed'], capture_output=True, text=True, check=True)
+        output = json.loads(found.stdout)
+        self.assertNotIn('prompt', output)
+        self.assertEqual(output['result'], {'content': 'retained result'})
+        self.assertEqual(output['acceptance_status'], 'stale')
+        self.assertFalse((self.root / 'runner.log').exists())
 
     def test_uncertain_pauses_only_one_host_and_recovery(self):
         self.q.add([{'id': str(i), 'prompt': 'x'} for i in range(3)])

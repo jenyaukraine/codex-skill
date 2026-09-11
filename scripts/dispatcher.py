@@ -508,6 +508,8 @@ def main():
     add = commands.add_parser('add', help='Atomically enqueue a JSON task manifest')
     add.add_argument('--file', type=Path, required=True)
     add.add_argument('--no-start', action='store_true', help='Only enqueue; used for isolated tests')
+    archive = commands.add_parser('archive', help='Archive explicitly reviewed terminal jobs from an acceptance manifest')
+    archive.add_argument('--file', type=Path, required=True)
     run = commands.add_parser('run', help='Fill each free slot immediately from the queue')
     run.add_argument('--slots', type=int, choices=range(1, 5), default=3)
     run.add_argument('--watch', action='store_true', help='Wait for new tasks until Ctrl+C')
@@ -534,12 +536,16 @@ def main():
     args.home.mkdir(parents=True, exist_ok=True)
     config = load_config(args.home)
     queue = Queue(args.home / 'queue.sqlite3')
-    queue.sync_workers(config['workers'])
+    if args.command != 'archive':
+        queue.sync_workers(config['workers'])
     if args.command == 'add':
         tasks = validate_tasks(json.loads(args.file.read_text(encoding='utf-8-sig')), {worker['id'] for worker in config['workers']})
         queue.add(tasks); emit({'added': len(tasks), 'ids': [t['id'] for t in tasks]})
         if not args.no_start:
             emit({'runner': ensure_runner(args.home)})
+    elif args.command == 'archive':
+        entries = json.loads(args.file.read_text(encoding='utf-8-sig'))
+        emit(queue.archive(entries))
     elif args.command == 'status':
         emit({'workers': queue.workers(), 'jobs': queue.status()})
     elif args.command == 'summary':
