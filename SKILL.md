@@ -7,6 +7,8 @@ description: Use the user's two local Bionic/LM Studio workers through a persist
 
 ## One supported launch path
 
+`bionic-local` is a filesystem skill, not a callable Bionic, MCP or dynamic tool. Read this file and run its Python scripts using the available shell/terminal execution tool. Do not call a tool named `bionic-local`, pass this name to a dynamic-tool dispatcher, or invent tool names. If a previous attempt returned `No Bionic tool named 'bionic-local'`, recover by using the script command below; do not retry tool discovery under guessed names. If shell execution is unavailable, report that specific limitation.
+
 Use `scripts/dispatcher.py add --file <absolute-manifest.json>` for **all generation tasks**, including one task. It automatically starts the persistent background runner if needed. Do not manually start another runner, call the LAN generation API, run `client.py --prompt-file`, or use project `run-500-tasks.ps1` / `.backup/**/run.py` launchers. They bypass the shared scheduler. `client.py` is an internal transport; only `--models` is a supported diagnostic command.
 
 Read [dispatcher usage](references/dispatcher.md) before first use. The paths are relative to this skill. The dispatcher is installed outside projects and works from any working directory.
