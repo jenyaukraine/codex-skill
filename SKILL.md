@@ -11,6 +11,8 @@ Use `scripts/dispatcher.py add --file <absolute-manifest.json>` for **all genera
 
 Read [dispatcher usage](references/dispatcher.md) before first use. The paths are relative to this skill. The dispatcher is installed outside projects and works from any working directory.
 
+For bounded TSX/CSS source reviews, use the bundled `scripts/source_review.py --workspace <project>` adapter. It prepares source-bearing manifests and submits them through the same `dispatcher.py add` path. Read [source review usage](references/source-review.md) for file selection, preparation-only mode and result collection. Prefer explicit files during integration; this helper does not authorize broad new audit batches or automatically apply patches.
+
 When the user asks to save frontier-model tokens, let local workers cover more routine work, or run "local-worker-first", also read [frontier token saving mode](references/token-saving.md).
 
 ## Current user preferences (2026-09-09)
@@ -21,7 +23,7 @@ The host and slot values below record the original defaults. Read live `config` 
 - Three requests per host, six total by default. Hardware supports four but three is the current requested limit. Per-worker slots and URLs can be changed through the local config UI.
 - One shared FIFO queue. Any available host takes the next task; do not pin tasks to a host. Legacy `worker` fields are accepted but ignored for routing.
 - Prepare a useful backlog before dispatch, then enqueue ready follow-ups as results arrive. Do not wait for all six results to start preparing the next iteration. If results awaiting review accumulate, finish acceptance instead of generating busywork.
-- Default model `qwen3.8-9b-distill`, OpenAI-compatible chat transport, no native per-request reasoning flag. Verified on host 33. Do not use `qwen3.8-9b-coder` for this queue because it returns LM Studio server errors. Do not change desktop model settings. A task ID is unique across the saved queue; use project, date and a meaningful suffix.
+- Default model `qwen3.8-9b-distill-uncensored-heretic`, OpenAI-compatible chat transport, no native per-request reasoning flag. Exact loaded ID verified on host 21 on 2026-09-11; verify each host independently. Do not use `qwen3.8-9b-coder` for this queue because it returns LM Studio server errors. Do not change desktop model settings. A task ID is unique across the saved queue; use project, date and a meaningful suffix.
 
 User preference: proactively delegate useful independent parts of the current authorized task to these workers, including implementation and test drafts. Do not reserve them only for trivial microtasks. Codex keeps integration and actual execution/acceptance.
 
@@ -53,4 +55,6 @@ An interrupted runner recovery pauses affected hosts because upstream status is 
 
 Useful diagnostics: dispatcher `summary`, `health`, `status`, `result <id>`, and client `--worker 21 --models` / `--worker 33 --models`. Prefer `summary --prefix <task-prefix>` when the queue is large. Use `health` for `/models` latency and availability checks without sending generation prompts. See the reference for recovery and isolated tests. No direct generation commands should appear in handoffs.
 
-Configuration: use `python "<skill>/scripts/dispatcher.py" config` for JSON config, `python "<skill>/scripts/dispatcher.py" config-ui` to open the local configuration page, or `python "<skill>/scripts/dispatcher.py" warmup` to pre-load enabled workers with the configured model/context/TTL. The UI supports default worker URLs, adding machines, enabling/disabling workers, per-worker slots, and per-worker model/output-token/context-window/TTL/timeout overrides. Context window defaults to `230000`; TTL defaults to `900` seconds. Output tokens are always at least `32768`. For a flaky host, lower its slots or raise timeout in config instead of bypassing the dispatcher.
+Configuration: use `python "<skill>/scripts/dispatcher.py" config` for JSON config, `python "<skill>/scripts/dispatcher.py" config-ui` to open the local configuration page, or `python "<skill>/scripts/dispatcher.py" warmup` to send a small probe only to an already loaded configured model. The UI supports default worker URLs, adding machines, enabling/disabling workers, per-worker slots, and per-worker model/output-token/context-window/TTL/timeout overrides. Context window defaults to `230000`; TTL defaults to `900` seconds. Output tokens are always at least `32768`. For a flaky host, lower its slots or raise timeout in config instead of bypassing the dispatcher.
+
+Model selection: use the exact user-approved loaded model. The client checks native `/api/v1/models` loaded instances before generation and warmup; it never substitutes a similarly named downloaded model. Health discovery now reports loaded LLMs only. Do not load another model or change desktop context settings to satisfy stale defaults. `already-running` confirms only a dispatcher process lock, not successful generation. Duplicate task IDs belong to the dispatcher queue; do not evade them with random prefixes. See the loaded-model safeguard in [dispatcher usage](references/dispatcher.md).

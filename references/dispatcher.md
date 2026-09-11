@@ -37,7 +37,7 @@ Defaults:
 
 Open the local configuration page with `config-ui`. It allows adding local/LAN machines, editing base URLs, enabling/disabling workers, setting slots per worker, and overriding model, timeout, max output tokens, context window, and TTL per worker. Set slots to `0` or disable a worker to keep it out of dispatch. Existing watch runners should be restarted to apply changed slot counts. If the requested UI port is busy, `config-ui` binds a free local fallback port and prints it.
 
-Default context window is `230000`; default TTL is `900` seconds. `warmup` sends a tiny request with the configured model, context window, and TTL to make the model hot before queue work. Normal generation requests also include TTL so LM Studio can unload the model after idle time. `max_tokens` is only the response/output budget and is clamped to at least `32768`.
+Default context window is `230000`; default TTL is `900` seconds. `warmup` sends a tiny request only if the exact configured model is already loaded. It does not load a model or change its context window. Normal generation requests also include TTL so LM Studio can unload the model after idle time. `max_tokens` is only the response/output budget and is clamped to at least `32768`.
 
 ## State and interpretation
 
@@ -88,4 +88,14 @@ Never kill a worker or silently repeat timed-out work. If the runner process exi
 
 `client.py` is an internal text transport. For read-only model discovery only: `python <skill>/scripts/client.py --worker 21 --models`. Do not send generation through it, raw HTTP, project helper scripts, or multiple queue processes.
 
-Default model: qwen3.8-9b-distill; OpenAI-compatible chat transport; max output tokens 32768 minimum; context window 230000; TTL 900 seconds; timeout 180 seconds. Do not use qwen3.8-9b-coder for this queue; it returns LM Studio server errors. Pass `run --reasoning off` only for models verified with LM Studio's native chat endpoint. Live defaults are centralized in `config.json`, falling back to `worker_config.py` defaults. Prefer `summary` over full `status` when the queue is large. Tests: `python -m unittest test_dispatcher -v` from the skill scripts directory.
+Default model: qwen3.8-9b-distill-uncensored-heretic; OpenAI-compatible chat transport; max output tokens 32768 minimum; context window 230000; TTL 900 seconds; timeout 180 seconds. Do not use qwen3.8-9b-coder for this queue; it returns LM Studio server errors. Pass `run --reasoning off` only for models verified with LM Studio's native chat endpoint. Live defaults are centralized in `config.json`, falling back to `worker_config.py` defaults. Prefer `summary` over full `status` when the queue is large. Tests: `python -m unittest test_dispatcher -v` from the skill scripts directory.
+
+## Loaded-model safeguard
+
+Before generation or warmup, the client reads `GET /api/v1/models` and checks `loaded_instances`, then sends the exact instance ID. Similar names and downloaded-but-unloaded models do not qualify. Failed or unsupported native discovery stops the request; there is no fallback to a catalog name. `/v1/models` alone is not proof of loading. See [LM Studio's loaded-instance schema](https://lmstudio.ai/docs/developer/rest/list).
+
+`health` and client `--models` now report only loaded LLM keys/instance IDs. Missing configured instances block a worker after the failed job; stable loaded-model health is required to resume. Existing config overrides remain intact. Select the user-approved exact loaded model in config instead of loading another variant. Context-window settings are retained for compatibility but do not override an already loaded instance.
+
+`already-running` reports only ownership of the dispatcher process lock. It does not confirm a healthy model or active generation. `UNIQUE constraint failed: jobs.id` is a duplicate in the local dispatcher SQLite queue, not evidence of an LM Studio database problem. Never evade it with random session IDs.
+
+The client safeguard applies to newly launched client processes even under an older runner. Already-issued requests are unaffected; a running dispatcher keeps its in-memory model/settings until a coordinated restart after outstanding work is resolved. Do not silently kill it or replay uncertain jobs.

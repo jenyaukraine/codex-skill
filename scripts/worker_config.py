@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
-DEFAULT_MODEL = "qwen3.8-9b-distill"
+DEFAULT_MODEL = "qwen3.8-9b-distill-uncensored-heretic"
 MIN_MAX_TOKENS = 32768
 DEFAULT_CONTEXT_WINDOW = 230000
 DEFAULT_TTL_SECONDS = 900

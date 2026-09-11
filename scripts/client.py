@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
-from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, DEFAULT_WORKERS, private_http_v1
+from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_MODEL, DEFAULT_TTL_SECONDS, DEFAULT_WORKERS, private_http_v1
 
 WORKERS = {worker["id"]: worker["base_url"] for worker in DEFAULT_WORKERS}
 
@@ -39,6 +39,28 @@ def request_json(base, endpoint, payload, timeout):
         return json.load(response)
 
 
+def loaded_models(base, timeout):
+    """Use native loaded-instance metadata, not the OpenAI available-model catalog."""
+    result = request_json(base.removesuffix('/v1'), '/api/v1/models', None, min(timeout, 10))
+    loaded = {}
+    for model in result['models']:
+        if model.get('type') != 'llm':
+            continue
+        instances = model.get('loaded_instances', [])
+        for instance in instances:
+            loaded[instance['id']] = instance['id']
+        if len(instances) == 1:
+            loaded.setdefault(model['key'], instances[0]['id'])
+    return loaded
+
+
+def require_loaded_model(base, model, timeout):
+    loaded = loaded_models(base, timeout)
+    if model not in loaded:
+        raise ValueError(f'Loaded model unavailable: {model}. No generation sent; select an exact loaded model in config.')
+    return loaded[model]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     target = parser.add_mutually_exclusive_group()
@@ -48,7 +70,7 @@ def main():
     action.add_argument("--models", action="store_true")
     action.add_argument("--warmup", action="store_true")
     action.add_argument("--prompt-file", type=Path)
-    parser.add_argument("--model", default="qwen3.8-9b-distill")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--via-dispatcher", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--max-tokens", type=positive, default=4096)
     parser.add_argument("--timeout", type=positive, default=900)
@@ -64,9 +86,10 @@ def main():
     args.base_url = args.base_url or WORKERS[args.worker or "21"]
     try:
         if args.models:
-            result = request_json(args.base_url, "/models", None, min(args.timeout, 10))
-            print(json.dumps({"base_url": args.base_url, "models": [m["id"] for m in result["data"]]}, ensure_ascii=False))
+            result = loaded_models(args.base_url, args.timeout)
+            print(json.dumps({"base_url": args.base_url, "models": list(result), "loaded_only": True}, ensure_ascii=False))
             return 0
+        args.model = require_loaded_model(args.base_url, args.model, args.timeout)
         if args.warmup:
             payload = {
                 "model": args.model,
@@ -75,7 +98,6 @@ def main():
                 "max_tokens": 256,
                 "stream": False,
                 "ttl": args.ttl,
-                "context_length": args.context_window,
             }
             result = request_json(args.base_url, "/chat/completions", payload, args.timeout)
             choice = result["choices"][0]
@@ -112,7 +134,6 @@ def main():
             "max_tokens": args.max_tokens,
             "stream": False,
             "ttl": args.ttl,
-            "context_length": args.context_window,
         }
         if args.reasoning is not None:
             result = request_json(args.base_url.removesuffix("/v1"), "/api/v1/chat", {

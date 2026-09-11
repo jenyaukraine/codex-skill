@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 import webbrowser
 from queue_store import Queue
-from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_TTL_SECONDS, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, save_config
+from worker_config import DEFAULT_CONTEXT_WINDOW, DEFAULT_MODEL, DEFAULT_TTL_SECONDS, MIN_MAX_TOKENS, default_config, enabled_workers, load_config, save_config
 
 DEFAULT_HOME = Path(__file__).resolve().parents[3] / 'bionic-dispatcher'
 AUTO_RESUME_INTERVAL_SECONDS = 20
@@ -114,6 +114,7 @@ def should_block_worker(status, result):
         'max retries exceeded',
         'local api or input file unavailable',
         'target machine actively refused',
+        'loaded model unavailable',
     )
     return any(marker in text for marker in unavailable_markers)
 
@@ -138,7 +139,7 @@ def ensure_runner(directory):
     return 'starting'
 
 
-def drain(queue, directory, slots=3, watch=False, execute=execute_job, model='qwen3.8-9b-distill', max_tokens=MIN_MAX_TOKENS, timeout=900, ttl=DEFAULT_TTL_SECONDS, context_window=DEFAULT_CONTEXT_WINDOW, reasoning='openai', workers=None):
+def drain(queue, directory, slots=3, watch=False, execute=execute_job, model=DEFAULT_MODEL, max_tokens=MIN_MAX_TOKENS, timeout=900, ttl=DEFAULT_TTL_SECONDS, context_window=DEFAULT_CONTEXT_WINDOW, reasoning='openai', workers=None):
     if workers is None:
         workers = [{'id': '21', 'base_url': None, 'slots': slots}, {'id': '33', 'base_url': None, 'slots': slots}]
     stop = threading.Event()

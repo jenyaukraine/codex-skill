@@ -20,12 +20,14 @@ Codex skill for using two local LM Studio/Bionic workers through one durable sha
 - `33`: `http://192.168.88.33:1234/v1`
 - `localhost:1234/v1` is the same physical machine as `21`, not a third worker.
 
-Default model: `qwen3.8-9b-distill`.
+Default model: `qwen3.8-9b-distill-uncensored-heretic`.
 Default context window for planning/diagnostics: `230000`.
 Minimum max output tokens: `32768`.
 Default TTL: `900` seconds.
 
 ## Usage
+
+For TSX/CSS source reviews, the bundled `scripts/source_review.py --workspace <project>` helper prepares source-bearing tasks, submits them through the shared dispatcher and collects full results. See [source review usage](references/source-review.md) for file selection, preparation-only mode and collection.
 
 Create a UTF-8 JSON manifest:
 
@@ -91,7 +93,7 @@ The configuration page supports:
 - changing default model, timeout, max output tokens, context window, and TTL,
 - overriding model, timeout, max output tokens, context window, and TTL per worker.
 
-The dispatcher warms models with the configured `context_window` and sends `ttl` on generation requests so LM Studio can unload the model after idle time. `max_tokens` means output budget only and is clamped to at least `32768`.
+The dispatcher checks the exact loaded model before generation and warmup. It preserves the loaded context window; the legacy context setting is not sent as a loading instruction. Requests still include `ttl`. `max_tokens` means output budget only and is clamped to at least `32768`.
 
 If the default port is busy, `config-ui` automatically falls back to a free local port and prints the URL.
 
